@@ -1,7 +1,6 @@
 {
-  "name": "dsh-dynamic-tools",
+  "name": "@dsh-plugin/dsh-dynamic-tools",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "description": "Keeps the tool declaration head of a request frozen and discloses tools registered later as trailing context, so mid-conversation tool changes stop invalidating the cached prompt prefix.",
   "exports": {
@@ -20,13 +19,30 @@
     "locale/*.json",
     "docs",
     "icon.svg",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --test tests/"
+    "test": "node --test \"tests/*.test.ts\"",
+    "prepack": "npm run build"
   },
+  "license": "LGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dsh-plugins/dsh-dynamic-tools.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "plugin",
+    "tools",
+    "prompt-cache"
+  ],
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
     "@deepseek-ai/dsh-agent": "^0.2.2-rc.2",

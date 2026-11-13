@@ -23,7 +23,7 @@ import { SOURCE_KIND } from './source.ts'
 import { createToolLoad, TOOL_LOAD_NAME } from './tool-load.ts'
 
 /** Cordis plugin name. */
-export const name = 'dynamic-tools'
+export const name = '@dsh-plugin/dsh-dynamic-tools'
 
 /** Services the plugin registers into. */
 export const inject = ['tools', 'systemPrompt']

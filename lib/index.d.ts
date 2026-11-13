@@ -14,7 +14,7 @@
 import z from '@deepseek-ai/schemastery';
 import type { Context } from '@deepseek-ai/cordis';
 /** Cordis plugin name. */
-export declare const name = "dynamic-tools";
+export declare const name = "@dsh-plugin/dsh-dynamic-tools";
 /** Services the plugin registers into. */
 export declare const inject: string[];
 /** Tool-selection and disclosure settings. */

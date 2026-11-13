@@ -51,7 +51,7 @@ npm test
 ```yaml
 - insert:
     - id: dynamic-tools
-      name: dsh-dynamic-tools
+      name: '@dsh-plugin/dsh-dynamic-tools'
 ```
 
 以目录链接方式安装后，重新执行 `npm run build` **不会**让正在运行的实例换用新产物：模块 URL 不变，Node 的 ESM 缓存不会重新读盘，热重载也不重新导入它。改完源码并构建后需重启 dsh 实例，新会话才会加载新的 `lib/`。
@@ -60,7 +60,7 @@ npm test
 
 ```yaml
 - id: dynamic-tools
-  name: dsh-dynamic-tools
+  name: '@dsh-plugin/dsh-dynamic-tools'
   config:
     dynamic:
       names: ['exit_plan_mode']
