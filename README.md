@@ -14,7 +14,7 @@ DSH 的 `agent-loop` 在工具集发生变化、且当前路由没有声明 `too
 ## 机制
 
 1. **冻结头部**：每个 Agent 在首步组装时捕获其准入定义，剔除配置为动态的名字，深冻结后每一步原样返回。头部之后不再变化。
-2. **尾部披露**：`agent/pre-step` 在其它监听器之后运行，把"已注册但不在头部"的工具以一条用户消息披露；消息里既有名字清单，也有完整定义（`disclosure.mode: schema`），并带上"可直接按名调用"的说明。定义变化按签名检测后重披露，工具消失时追加 `<tools_removed>`。
+2. **尾部披露**：`agent/pre-step` 在其它监听器之后运行，把"本步已准入但不在头部"的工具以一条用户消息披露；消息里既有名字清单，也有完整定义（`disclosure.mode: schema`），并带上"可直接按名调用"的说明。定义变化按签名检测后重披露，工具失去准入时追加 `<tools_removed>`。只注册、`when` 判为不可用的工具不会被公告——否则模型会去调用一个注定被拒的工具。
 3. **声明≠准入**：头部里的工具若本步未被准入（`when` 判定为假），调用会在策略与审批之前返回一条可执行错误，绝不执行。工具被撤下时 `UNKNOWN_TOOL`。
 4. **可见即记录**：披露消息带 `source.kind = dynamic-tools`，resume、fork、compaction 后由历史折叠重建；被压缩遮蔽的内容会在下一次开始时重发。
 5. **按需加载**：`disclosure.mode: names` 时只报名字，模型调用 `tool_load` 取完整定义；`disclosure.requireLoad` 可要求动态工具必须先加载才能执行。
@@ -79,7 +79,7 @@ npm test
 | `disclosure.maxToolsPerMessage` | `8` | 单条披露消息的工具数 |
 | `disclosure.maxSchemaBytes` | `6000` | 单个定义上限，超出转为名字公告 |
 | `disclosure.maxMessageBytes` | `20000` | 单条消息上限，超出拆条 |
-| `disclosure.announceRemovals` | `true` | 工具消失时追加 `<tools_removed>` |
+| `disclosure.announceRemovals` | `true` | 工具失去准入时追加 `<tools_removed>` |
 | `unavailableReasons` | `{ exit_plan_mode: … }` | 头部工具未准入时的模型可见原因 |
 | `maxParallelCalls` | `10` | 循环未给出并发上限时使用 |
 
@@ -89,7 +89,7 @@ npm test
 
 ### 模型看到什么
 
-头部声明保持不变。动态工具在首次可用时以一条 `<system-reminder>` 出现：名字 + 描述 + 完整 JSON 定义 + "可直接按名调用"的说明；移除时出现 `<tools_removed>`。`names` 模式下模型需先调 `tool_load`，定义在其结果之后作为用户消息到达。
+头部声明保持不变。动态工具在本步首次被准入时以一条 `<system-reminder>` 出现：名字 + 描述 + 完整 JSON 定义 + "可直接按名调用"的说明；移除时出现 `<tools_removed>`。`names` 模式下模型需先调 `tool_load`，定义在其结果之后作为用户消息到达。
 
 ### Token 影响
 

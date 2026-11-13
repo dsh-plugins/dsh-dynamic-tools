@@ -31,6 +31,8 @@ export interface DiscloseOptions {
   readonly announceRemovals: boolean
   /** Names the frozen head declares, per installed agent. */
   readonly catalogNames: (agent: Agent) => ReadonlySet<string>
+  /** Definitions this step admits, recorded by the executor's last assembly. */
+  readonly admitted: (agent: Agent) => readonly ToolDefinition[] | undefined
 }
 
 /** Process-local delivery state, kept as a fast path beside the durable fold. */
@@ -84,8 +86,14 @@ function schemasOutsideCatalog(
 
 /**
  * Append this step's disclosure messages.
+ *
+ * Only definitions the step actually admits are candidates. A registered tool
+ * whose `when` condition is false is unavailable right now: announcing it would
+ * invite a call that can only be denied, so it is not disclosed at all.
+ *
  * @param ctx - plugin context for diagnostics.
  * @param agent - agent entering the step.
+ * @param admitted - definitions this step admits.
  * @param executorCatalog - names the frozen head declares.
  * @param options - disclosure settings.
  * @returns the messages to append, in order.
@@ -93,14 +101,15 @@ function schemasOutsideCatalog(
 export function disclosureMessages(
   ctx: Context,
   agent: Agent,
+  admitted: readonly ToolDefinition[],
   executorCatalog: ReadonlySet<string>,
   options: DiscloseOptions,
 ): readonly UserMessage[] {
-  const candidates = schemasOutsideCatalog(ctx.tools.definitions(agent), executorCatalog)
+  const candidates = schemasOutsideCatalog(admitted, executorCatalog)
   const current = currentState(agent, options.sourceKind)
-  const registered = new Set(candidates.map(schema => schema.name))
+  const available = new Set(candidates.map(schema => schema.name))
   const removed = options.announceRemovals
-    ? [...current.disclosed.keys()].filter(name => !registered.has(name) && !executorCatalog.has(name))
+    ? [...current.disclosed.keys()].filter(name => !available.has(name) && !executorCatalog.has(name))
     : []
   const batches = planDisclosure(candidates, removed, current, options.limits)
   if (batches.length === 0) {
@@ -128,7 +137,10 @@ export function registerDisclosure(ctx: Context, options: DiscloseOptions): void
     const decision = await next()
     if (decision.kind === 'reject' || signal.aborted) return decision
     try {
-      const messages = disclosureMessages(ctx, agent, options.catalogNames(agent), options)
+      // The executor recorded this step's admission when assembly described the head.
+      const admitted = options.admitted(agent)
+      if (admitted === undefined) return decision
+      const messages = disclosureMessages(ctx, agent, admitted, options.catalogNames(agent), options)
       if (messages.length === 0) return decision
       return { ...decision, messages: [...decision.messages, ...messages] }
     } catch (error: unknown) {

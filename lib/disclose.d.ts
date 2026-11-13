@@ -11,6 +11,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { UserMessage } from '@deepseek-ai/dsh-llm';
+import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
 import { type DisclosedState, type DisclosureLimits } from './disclosure.ts';
 import type { SourceKind } from './source.ts';
 /** Everything the pre-step listener needs to plan one step's disclosure. */
@@ -23,6 +24,8 @@ export interface DiscloseOptions {
     readonly announceRemovals: boolean;
     /** Names the frozen head declares, per installed agent. */
     readonly catalogNames: (agent: Agent) => ReadonlySet<string>;
+    /** Definitions this step admits, recorded by the executor's last assembly. */
+    readonly admitted: (agent: Agent) => readonly ToolDefinition[] | undefined;
 }
 /**
  * Read the session's delivered state, rebuilding it from durable messages when
@@ -45,13 +48,19 @@ export declare function storeState(agent: Agent, state: DisclosedState): void;
 export declare function invalidateState(agent: Agent): void;
 /**
  * Append this step's disclosure messages.
+ *
+ * Only definitions the step actually admits are candidates. A registered tool
+ * whose `when` condition is false is unavailable right now: announcing it would
+ * invite a call that can only be denied, so it is not disclosed at all.
+ *
  * @param ctx - plugin context for diagnostics.
  * @param agent - agent entering the step.
+ * @param admitted - definitions this step admits.
  * @param executorCatalog - names the frozen head declares.
  * @param options - disclosure settings.
  * @returns the messages to append, in order.
  */
-export declare function disclosureMessages(ctx: Context, agent: Agent, executorCatalog: ReadonlySet<string>, options: DiscloseOptions): readonly UserMessage[];
+export declare function disclosureMessages(ctx: Context, agent: Agent, admitted: readonly ToolDefinition[], executorCatalog: ReadonlySet<string>, options: DiscloseOptions): readonly UserMessage[];
 /**
  * Register the pre-step listener that appends disclosures.
  * @param ctx - plugin context owning the listener.

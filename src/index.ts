@@ -105,7 +105,7 @@ export const Config: z<Config> = z.object({
 function resolveSettings(config: Config): {
   rules: ClassificationRules
   install: Omit<InstallOptions, 'executors' | 'reported'>
-  disclose: Omit<DiscloseOptions, 'catalogNames'>
+  disclose: Omit<DiscloseOptions, 'catalogNames' | 'admitted'>
 } {
   const rules: ClassificationRules = {
     dynamicNames: config.dynamic.names,
@@ -173,5 +173,6 @@ export function apply(ctx: Context, config: Config): void {
   registerDisclosure(ctx, {
     ...settings.disclose,
     catalogNames: agent => executors.get(agent)?.declaredNames() ?? new Set(),
+    admitted: agent => executors.get(agent)?.admittedDefinitions(),
   })
 }
