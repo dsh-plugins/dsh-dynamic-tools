@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="300" viewBox="0 0 640 300" role="img" aria-label="A frozen tool declaration head beside a conversation that receives a new tool definition as a trailing message">
+  <rect x="32" y="46" width="248" height="208" rx="14" fill="#176b5b" fill-opacity="0.08" stroke="#176b5b" stroke-width="3"/>
+  <rect x="64" y="78" width="184" height="18" rx="9" fill="#176b5b" fill-opacity="0.8"/>
+  <rect x="64" y="112" width="184" height="18" rx="9" fill="#176b5b" fill-opacity="0.55"/>
+  <rect x="64" y="146" width="184" height="18" rx="9" fill="#176b5b" fill-opacity="0.35"/>
+  <rect x="196" y="186" width="52" height="40" rx="8" fill="none" stroke="#176b5b" stroke-width="3"/>
+  <path d="M208 186v-10a14 14 0 0 1 28 0v10" fill="none" stroke="#176b5b" stroke-width="3"/>
+  <circle cx="222" cy="202" r="4" fill="#176b5b"/>
+  <path d="M222 206v8" fill="none" stroke="#176b5b" stroke-width="3" stroke-linecap="round"/>
+
+  <path d="M300 150h56" fill="none" stroke="#db6b2c" stroke-width="4" stroke-linecap="round"/>
+  <path d="M348 142l12 8-12 8" fill="none" stroke="#db6b2c" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="372" y="46" width="236" height="208" rx="14" fill="#db6b2c" fill-opacity="0.07" stroke="#db6b2c" stroke-width="3"/>
+  <rect x="396" y="72" width="188" height="66" rx="12" fill="none" stroke="#db6b2c" stroke-width="3"/>
+  <path d="M396 96h188" fill="none" stroke="#db6b2c" stroke-width="2" stroke-opacity="0.5"/>
+  <rect x="414" y="84" width="64" height="12" rx="6" fill="#db6b2c" fill-opacity="0.6"/>
+  <rect x="414" y="108" width="140" height="8" rx="4" fill="#db6b2c" fill-opacity="0.35"/>
+  <rect x="414" y="122" width="104" height="8" rx="4" fill="#db6b2c" fill-opacity="0.35"/>
+
+  <rect x="396" y="154" width="188" height="76" rx="12" fill="#db6b2c" fill-opacity="0.16" stroke="#db6b2c" stroke-width="3" stroke-dasharray="8 6"/>
+  <rect x="414" y="168" width="72" height="12" rx="6" fill="#db6b2c" fill-opacity="0.7"/>
+  <path d="M420 202h52M420 214h96" fill="none" stroke="#db6b2c" stroke-width="4" stroke-linecap="round" stroke-opacity="0.6"/>
+  <path d="M534 196h24M546 184v24" fill="none" stroke="#db6b2c" stroke-width="4" stroke-linecap="round"/>
+</svg>

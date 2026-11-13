@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Dynamic tools",
+    "description": "Freezes the request tool list after a session's first step and delivers later tools as trailing context, so a mid-conversation tool change no longer rewrites the cached prompt prefix. Applies to the native tool executor; tools are classified by name, and a tool that the step does not admit fails with an actionable error instead of running.",
+    "detail": "docs/DETAIL.md"
+  }
+}
