@@ -6,6 +6,10 @@
  * registry, not the step's admission: a tool the model may not call right now
  * is still worth naming, because the call itself reports why it is unavailable.
  *
+ * A route that reads only declared tool lists gets names instead of schemas:
+ * its definition can only take effect once `tool_load` added it to the head, so
+ * attaching it here would claim a callability the route does not have.
+ *
  * @module dsh-dynamic-tools/disclose
  */
 import type { Context } from '@deepseek-ai/cordis';
@@ -14,6 +18,7 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm';
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
 import { type DisclosedState, type DisclosureLimits } from './disclosure.ts';
 import type { SourceKind } from './source.ts';
+import type { ToolStrategy } from './strategy.ts';
 /** Everything the pre-step listener needs to plan one step's disclosure. */
 export interface DiscloseOptions {
     /** Message source kind owned by this plugin. */
@@ -22,6 +27,8 @@ export interface DiscloseOptions {
     readonly limits: DisclosureLimits;
     /** Whether names that disappear from the registry are announced. */
     readonly announceRemovals: boolean;
+    /** Strategy this step's executor settled, per installed agent. */
+    readonly strategy: (agent: Agent) => ToolStrategy | undefined;
     /** Names the frozen head declares, per installed agent. */
     readonly catalogNames: (agent: Agent) => ReadonlySet<string>;
     /** Definitions this step admits, recorded by the executor's last assembly. */
@@ -42,11 +49,6 @@ export declare function currentState(agent: Agent, kind: SourceKind): DisclosedS
  */
 export declare function storeState(agent: Agent, state: DisclosedState): void;
 /**
- * Drop process-local state so the next read folds the durable messages again.
- * @param agent - agent whose session was compacted or replaced.
- */
-export declare function invalidateState(agent: Agent): void;
-/**
  * Append this step's disclosure messages.
  *
  * Only definitions the step actually admits are candidates. A registered tool
@@ -58,9 +60,10 @@ export declare function invalidateState(agent: Agent): void;
  * @param admitted - definitions this step admits.
  * @param executorCatalog - names the frozen head declares.
  * @param options - disclosure settings.
+ * @param strategy - how this step's route receives dynamic tools.
  * @returns the messages to append, in order.
  */
-export declare function disclosureMessages(ctx: Context, agent: Agent, admitted: readonly ToolDefinition[], executorCatalog: ReadonlySet<string>, options: DiscloseOptions): readonly UserMessage[];
+export declare function disclosureMessages(ctx: Context, agent: Agent, admitted: readonly ToolDefinition[], executorCatalog: ReadonlySet<string>, options: DiscloseOptions, strategy: ToolStrategy): readonly UserMessage[];
 /**
  * Register the pre-step listener that appends disclosures.
  * @param ctx - plugin context owning the listener.

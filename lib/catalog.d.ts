@@ -46,6 +46,17 @@ export declare function splitCatalog(definitions: readonly ToolSchemaLike[], rul
     dynamic: ToolSchemaLike[];
 };
 /**
+ * Append declared definitions to the frozen catalog, keeping both orders.
+ *
+ * A name the catalog already declares keeps its catalog position and
+ * definition: the head must not move because a tool became loadable.
+ *
+ * @param catalog - frozen declaration head.
+ * @param declared - definitions loaded on demand, in load order.
+ * @returns the head followed by every declared name it does not declare.
+ */
+export declare function extendCatalog(catalog: readonly ToolSchemaLike[], declared: readonly ToolSchemaLike[]): ToolSchemaLike[];
+/**
  * JSON size of one definition as it would be disclosed.
  * @param schema - model-facing schema of the definition.
  * @returns UTF-8 byte length of its JSON encoding.

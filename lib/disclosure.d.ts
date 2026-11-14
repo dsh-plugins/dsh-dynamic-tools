@@ -38,9 +38,36 @@ export interface DisclosedState {
     readonly disclosed: ReadonlyMap<string, DisclosedEntry>;
     /** Names whose full definition the model has read, attached or loaded on demand. */
     readonly loaded: ReadonlySet<string>;
+    /**
+     * Definitions the model has read, in delivery order.
+     *
+     * The declare-on-load strategy turns these into tool-list declarations, so
+     * they outlive the announcement: a loaded tool stays declared even after the
+     * registry stops admitting it.
+     */
+    readonly definitions: ReadonlyMap<string, ToolSchemaLike>;
+    /**
+     * Names whose recorded definition block could not be parsed, in delivery
+     * order. The caller reports them: the definition is disclosed again, and the
+     * damage must not stay silent.
+     */
+    readonly damaged: readonly string[];
 }
 /** The empty state of a session that has disclosed nothing yet. */
 export declare const EMPTY_DISCLOSED: DisclosedState;
+/**
+ * Definitions that no route can deliver because they exceed the schema cap.
+ *
+ * A `tail` route can still announce such a tool by name — the model calls it
+ * without reading the schema, and `tool_load` reports the cap. A `names` route
+ * has no such fallback: the tool can only run after its definition was loaded,
+ * so announcing it would promise a load that must fail.
+ *
+ * @param schemas - dynamic definitions admitted for this step.
+ * @param limits - validated disclosure limits.
+ * @returns names whose definition exceeds `maxSchemaBytes`.
+ */
+export declare function oversizedNames(schemas: readonly ToolSchemaLike[], limits: DisclosureLimits): string[];
 /**
  * Plan the disclosures one step needs.
  *
@@ -55,6 +82,13 @@ export declare const EMPTY_DISCLOSED: DisclosedState;
  * @returns ordered batches, empty when the model already knows everything.
  */
 export declare function planDisclosure(admitted: readonly ToolSchemaLike[], removed: readonly string[], state: DisclosedState, limits: DisclosureLimits): DisclosureBatch[];
+/**
+ * Record one delivered definition, clearing any earlier damage for that name.
+ * @param state - state before this delivery.
+ * @param schema - definition the model has now read.
+ * @returns the updated state.
+ */
+export declare function withDefinition(state: DisclosedState, schema: ToolSchemaLike): DisclosedState;
 /**
  * Fold delivered batches into the delivered state.
  * @param previous - state before these batches.

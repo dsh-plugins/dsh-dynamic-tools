@@ -4,7 +4,10 @@ import { toolSignature } from '../src/catalog.ts'
 import {
   applyDisclosure,
   EMPTY_DISCLOSED,
+  oversizedNames,
   planDisclosure,
+  withDefinition,
+  type DisclosedState,
   type DisclosureLimits,
 } from '../src/disclosure.ts'
 
@@ -28,6 +31,21 @@ test('a newly admitted dynamic tool is disclosed once', () => {
   assert.deepEqual(batches[0]?.added.map(entry => entry.name), ['exit_plan_mode'])
   assert.deepEqual(batches[0]?.names, [])
   assert.deepEqual(batches[0]?.removed, [])
+})
+
+test('an attached definition is recorded for the declare strategy', () => {
+  const tool = schema('exit_plan_mode')
+  const batches = planDisclosure([tool], [], EMPTY_DISCLOSED, limits)
+  const state = applyDisclosure(EMPTY_DISCLOSED, batches)
+  assert.deepEqual([...state.definitions.keys()], ['exit_plan_mode'])
+  assert.equal(state.definitions.get('exit_plan_mode'), tool)
+})
+
+test('a name announced without a schema records no definition', () => {
+  const batches = planDisclosure([schema('mcp__srv__a')], [], EMPTY_DISCLOSED, { ...limits, mode: 'names' })
+  const state = applyDisclosure(EMPTY_DISCLOSED, batches)
+  assert.equal(state.disclosed.has('mcp__srv__a'), true)
+  assert.equal(state.definitions.size, 0)
 })
 
 test('an unchanged disclosed tool is not disclosed again', () => {
@@ -55,11 +73,19 @@ test('a name announced without a schema stays announced', () => {
   assert.deepEqual(planDisclosure([schema('exit_plan_mode', 'changed')], [], state, limits), [])
 })
 
-test('an oversized definition is announced by name instead of attached', () => {
+test('an oversized definition is announced by name on a tail route', () => {
   const huge = schema('mcp__srv__big', 'x'.repeat(500))
   const batches = planDisclosure([huge], [], EMPTY_DISCLOSED, limits)
   assert.deepEqual(batches[0]?.added, [])
   assert.deepEqual(batches[0]?.names, ['mcp__srv__big'])
+})
+
+test('an oversized definition is dropped on a route that can only load it', () => {
+  const huge = schema('mcp__srv__big', 'x'.repeat(500))
+  const small = schema('mcp__srv__ok')
+  const batches = planDisclosure([huge, small], [], EMPTY_DISCLOSED, { ...limits, mode: 'names' })
+  assert.deepEqual(batches.map(batch => batch.names), [['mcp__srv__ok']])
+  assert.deepEqual(oversizedNames([huge, small], { ...limits, mode: 'names' }), ['mcp__srv__big'])
 })
 
 test('disclosure respects the per-message tool count', () => {
@@ -83,6 +109,25 @@ test('removals are announced in their own batch and dropped from state', () => {
   const next = applyDisclosure(state, batches)
   assert.equal(next.disclosed.has('exit_plan_mode'), false)
   assert.equal(next.loaded.has('exit_plan_mode'), false)
+  assert.equal(next.definitions.has('exit_plan_mode'), false)
+})
+
+test('recording a definition clears the damage mark for that name', () => {
+  const damaged: DisclosedState = {
+    disclosed: new Map([['broken', { signature: null, schema: false }]]),
+    loaded: new Set(),
+    definitions: new Map(),
+    damaged: ['broken', 'other'],
+  }
+  const tool = schema('broken')
+  const recorded = withDefinition(damaged, tool)
+  assert.deepEqual(recorded.damaged, ['other'])
+  assert.equal(recorded.definitions.get('broken'), tool)
+  assert.equal(recorded.loaded.has('broken'), true)
+
+  const attached = applyDisclosure(damaged, [{ added: [tool], names: [], removed: [] }])
+  assert.deepEqual(attached.damaged, ['other'])
+  assert.equal(attached.loaded.has('broken'), true)
 })
 
 test('an empty plan produces no message at all', () => {

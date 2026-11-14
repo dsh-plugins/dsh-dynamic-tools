@@ -18,8 +18,8 @@ export interface FoldableMessage {
 }
 /**
  * Fold every dynamic-tools message in delivery order.
- * Damaged blocks are ignored: an unreadable disclosure only costs one
- * re-announcement, never a wrong refusal.
+ * A damaged block still marks its name as announced, so the model keeps seeing
+ * the name; the definition is re-disclosed because it was never recorded.
  *
  * @param messages - derived session messages in model order.
  * @param kind - message source kind owned by this plugin.

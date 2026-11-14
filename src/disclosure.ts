@@ -43,10 +43,48 @@ export interface DisclosedState {
   readonly disclosed: ReadonlyMap<string, DisclosedEntry>
   /** Names whose full definition the model has read, attached or loaded on demand. */
   readonly loaded: ReadonlySet<string>
+  /**
+   * Definitions the model has read, in delivery order.
+   *
+   * The declare-on-load strategy turns these into tool-list declarations, so
+   * they outlive the announcement: a loaded tool stays declared even after the
+   * registry stops admitting it.
+   */
+  readonly definitions: ReadonlyMap<string, ToolSchemaLike>
+  /**
+   * Names whose recorded definition block could not be parsed, in delivery
+   * order. The caller reports them: the definition is disclosed again, and the
+   * damage must not stay silent.
+   */
+  readonly damaged: readonly string[]
 }
 
 /** The empty state of a session that has disclosed nothing yet. */
-export const EMPTY_DISCLOSED: DisclosedState = { disclosed: new Map(), loaded: new Set() }
+export const EMPTY_DISCLOSED: DisclosedState = {
+  disclosed: new Map(),
+  loaded: new Set(),
+  definitions: new Map(),
+  damaged: [],
+}
+
+/**
+ * Definitions that no route can deliver because they exceed the schema cap.
+ *
+ * A `tail` route can still announce such a tool by name — the model calls it
+ * without reading the schema, and `tool_load` reports the cap. A `names` route
+ * has no such fallback: the tool can only run after its definition was loaded,
+ * so announcing it would promise a load that must fail.
+ *
+ * @param schemas - dynamic definitions admitted for this step.
+ * @param limits - validated disclosure limits.
+ * @returns names whose definition exceeds `maxSchemaBytes`.
+ */
+export function oversizedNames(
+  schemas: readonly ToolSchemaLike[],
+  limits: DisclosureLimits,
+): string[] {
+  return schemas.filter(schema => schemaBytes(schema) > limits.maxSchemaBytes).map(schema => schema.name)
+}
 
 /**
  * Plan the disclosures one step needs.
@@ -75,7 +113,11 @@ export function planDisclosure(
       if (!entry.schema) continue
       if (entry.signature === toolSignature(schema)) continue
     }
-    if (limits.mode === 'schema' && schemaBytes(schema) <= limits.maxSchemaBytes) attached.push(schema)
+    if (schemaBytes(schema) > limits.maxSchemaBytes) {
+      if (limits.mode === 'schema') namesOnly.push(schema.name)
+      continue
+    }
+    if (limits.mode === 'schema') attached.push(schema)
     else namesOnly.push(schema.name)
   }
 
@@ -119,6 +161,23 @@ export function planDisclosure(
 }
 
 /**
+ * Record one delivered definition, clearing any earlier damage for that name.
+ * @param state - state before this delivery.
+ * @param schema - definition the model has now read.
+ * @returns the updated state.
+ */
+export function withDefinition(state: DisclosedState, schema: ToolSchemaLike): DisclosedState {
+  const loaded = new Set(state.loaded).add(schema.name)
+  const definitions = new Map(state.definitions).set(schema.name, schema)
+  return {
+    disclosed: state.disclosed,
+    loaded,
+    definitions,
+    damaged: state.damaged.filter(name => name !== schema.name),
+  }
+}
+
+/**
  * Fold delivered batches into the delivered state.
  * @param previous - state before these batches.
  * @param batches - batches that were delivered.
@@ -130,10 +189,14 @@ export function applyDisclosure(
 ): DisclosedState {
   const disclosed = new Map(previous.disclosed)
   const loaded = new Set(previous.loaded)
+  const definitions = new Map(previous.definitions)
+  const damaged = new Set(previous.damaged)
   for (const batch of batches) {
     for (const schema of batch.added) {
       disclosed.set(schema.name, { signature: toolSignature(schema), schema: true })
       loaded.add(schema.name)
+      definitions.set(schema.name, schema)
+      damaged.delete(schema.name)
     }
     for (const name of batch.names) {
       disclosed.set(name, { signature: null, schema: false })
@@ -141,7 +204,9 @@ export function applyDisclosure(
     for (const name of batch.removed) {
       disclosed.delete(name)
       loaded.delete(name)
+      definitions.delete(name)
+      damaged.delete(name)
     }
   }
-  return { disclosed, loaded }
+  return { disclosed, loaded, definitions, damaged: [...damaged] }
 }

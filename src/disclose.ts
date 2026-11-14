@@ -6,6 +6,10 @@
  * registry, not the step's admission: a tool the model may not call right now
  * is still worth naming, because the call itself reports why it is unavailable.
  *
+ * A route that reads only declared tool lists gets names instead of schemas:
+ * its definition can only take effect once `tool_load` added it to the head, so
+ * attaching it here would claim a callability the route does not have.
+ *
  * @module dsh-dynamic-tools/disclose
  */
 
@@ -16,10 +20,17 @@ import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { projectToolSchema } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import type { ToolSchemaLike } from './catalog.ts'
-import { applyDisclosure, planDisclosure, type DisclosedState, type DisclosureLimits } from './disclosure.ts'
+import {
+  applyDisclosure,
+  oversizedNames,
+  planDisclosure,
+  type DisclosedState,
+  type DisclosureLimits,
+} from './disclosure.ts'
 import { foldDisclosed } from './fold.ts'
 import { renderDisclosure } from './render.ts'
 import type { SourceKind } from './source.ts'
+import type { ToolStrategy } from './strategy.ts'
 
 /** Everything the pre-step listener needs to plan one step's disclosure. */
 export interface DiscloseOptions {
@@ -29,19 +40,19 @@ export interface DiscloseOptions {
   readonly limits: DisclosureLimits
   /** Whether names that disappear from the registry are announced. */
   readonly announceRemovals: boolean
+  /** Strategy this step's executor settled, per installed agent. */
+  readonly strategy: (agent: Agent) => ToolStrategy | undefined
   /** Names the frozen head declares, per installed agent. */
   readonly catalogNames: (agent: Agent) => ReadonlySet<string>
   /** Definitions this step admits, recorded by the executor's last assembly. */
   readonly admitted: (agent: Agent) => readonly ToolDefinition[] | undefined
 }
 
-/** Process-local delivery state, kept as a fast path beside the durable fold. */
-interface HeldState {
-  state: DisclosedState
-}
-
 /** Per-Agent delivery state without retaining agents. */
-const stateByAgent = new WeakMap<Agent, HeldState>()
+const stateByAgent = new WeakMap<Agent, DisclosedState>()
+
+/** Per-Agent diagnostics already reported, so each one appears once. */
+const reportedByAgent = new WeakMap<Agent, Set<string>>()
 
 /**
  * Read the session's delivered state, rebuilding it from durable messages when
@@ -51,10 +62,10 @@ const stateByAgent = new WeakMap<Agent, HeldState>()
  * @returns the folded state.
  */
 export function currentState(agent: Agent, kind: SourceKind): DisclosedState {
-  const holder = stateByAgent.get(agent)
-  if (holder !== undefined) return holder.state
+  const held = stateByAgent.get(agent)
+  if (held !== undefined) return held
   const folded = foldDisclosed(agent.session.deriveMessages(), kind)
-  stateByAgent.set(agent, { state: folded })
+  stateByAgent.set(agent, folded)
   return folded
 }
 
@@ -64,15 +75,22 @@ export function currentState(agent: Agent, kind: SourceKind): DisclosedState {
  * @param state - new state.
  */
 export function storeState(agent: Agent, state: DisclosedState): void {
-  stateByAgent.set(agent, { state })
+  stateByAgent.set(agent, state)
 }
 
 /**
- * Drop process-local state so the next read folds the durable messages again.
- * @param agent - agent whose session was compacted or replaced.
+ * Report a per-agent diagnostic once, so a repeated condition does not repeat
+ * its log line on every step.
+ * @param agent - agent the condition belongs to.
+ * @param key - stable key for this condition.
+ * @param report - emitter, called only for a key not reported before.
  */
-export function invalidateState(agent: Agent): void {
-  stateByAgent.delete(agent)
+function reportOnce(agent: Agent, key: string, report: () => void): void {
+  const reported = reportedByAgent.get(agent) ?? new Set<string>()
+  if (reported.has(key)) return
+  reported.add(key)
+  reportedByAgent.set(agent, reported)
+  report()
 }
 
 function schemasOutsideCatalog(
@@ -96,6 +114,7 @@ function schemasOutsideCatalog(
  * @param admitted - definitions this step admits.
  * @param executorCatalog - names the frozen head declares.
  * @param options - disclosure settings.
+ * @param strategy - how this step's route receives dynamic tools.
  * @returns the messages to append, in order.
  */
 export function disclosureMessages(
@@ -104,14 +123,32 @@ export function disclosureMessages(
   admitted: readonly ToolDefinition[],
   executorCatalog: ReadonlySet<string>,
   options: DiscloseOptions,
+  strategy: ToolStrategy,
 ): readonly UserMessage[] {
   const candidates = schemasOutsideCatalog(admitted, executorCatalog)
   const current = currentState(agent, options.sourceKind)
+  for (const name of current.damaged) {
+    reportOnce(agent, `damaged:${name}`, () => {
+      ctx.logger.warn('dsh-dynamic-tools: recorded definition for "%s" could not be parsed; disclosing it again', name)
+    })
+  }
+  const limits: DisclosureLimits = strategy === 'declare' ? { ...options.limits, mode: 'names' } : options.limits
+  if (limits.mode === 'names') {
+    for (const name of oversizedNames(candidates, limits)) {
+      reportOnce(agent, `oversized:${name}`, () => {
+        ctx.logger.warn(
+          'dsh-dynamic-tools: "%s" exceeds maxSchemaBytes (%d) and cannot be loaded on this route; it is not announced',
+          name,
+          limits.maxSchemaBytes,
+        )
+      })
+    }
+  }
   const available = new Set(candidates.map(schema => schema.name))
   const removed = options.announceRemovals
     ? [...current.disclosed.keys()].filter(name => !available.has(name) && !executorCatalog.has(name))
     : []
-  const batches = planDisclosure(candidates, removed, current, options.limits)
+  const batches = planDisclosure(candidates, removed, current, limits)
   if (batches.length === 0) {
     // A pruned history still needs its records re-linked for later comparisons.
     const folded = foldDisclosed(agent.session.deriveMessages(), options.sourceKind)
@@ -119,7 +156,7 @@ export function disclosureMessages(
     return []
   }
   const messages = batches.map(batch => createUserMessage({
-    content: [{ type: 'text', text: renderDisclosure(batch) }],
+    content: [{ type: 'text', text: renderDisclosure(batch, strategy) }],
     source: { kind: options.sourceKind, form: 'catalog' },
   }))
   storeState(agent, applyDisclosure(current, batches))
@@ -133,14 +170,25 @@ export function disclosureMessages(
  * @param options - disclosure settings.
  */
 export function registerDisclosure(ctx: Context, options: DiscloseOptions): void {
-  ctx.on('agent/pre-step', async ({ agent, signal }, next): Promise<PreStepDecision> => {
+  ctx.on('agent/pre-step', async ({ agent, signal, modelSelection }, next): Promise<PreStepDecision> => {
     const decision = await next()
     if (decision.kind === 'reject' || signal.aborted) return decision
     try {
-      // The executor recorded this step's admission when assembly described the head.
+      // The executor recorded this step's admission and strategy when assembly
+      // described the head, which happens before this listener runs.
       const admitted = options.admitted(agent)
       if (admitted === undefined) return decision
-      const messages = disclosureMessages(ctx, agent, admitted, options.catalogNames(agent), options)
+      const strategy = options.strategy(agent) ?? 'tail'
+      if (strategy === 'declare') {
+        reportOnce(agent, 'declare', () => {
+          ctx.logger.info(
+            'dsh-dynamic-tools: announcing definitions by name only on %s/%s; a loaded tool is declared in the next request',
+            modelSelection.provider,
+            modelSelection.model,
+          )
+        })
+      }
+      const messages = disclosureMessages(ctx, agent, admitted, options.catalogNames(agent), options, strategy)
       if (messages.length === 0) return decision
       return { ...decision, messages: [...decision.messages, ...messages] }
     } catch (error: unknown) {

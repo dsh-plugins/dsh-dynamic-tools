@@ -37,34 +37,37 @@ function namesOf(body: string): string[] {
 
 function matches(text: string, pattern: RegExp): string[] {
   const bodies: string[] = []
-  pattern.lastIndex = 0
   for (const match of text.matchAll(pattern)) bodies.push(match[1] ?? '')
   return bodies.flatMap(namesOf)
 }
 
 /**
  * Read one definition block, if it is a valid schema.
+ *
+ * A malformed block is not an error here: the fold reports it as damage, so the
+ * next step re-announces the tool instead of trusting a wrong record.
+ *
  * @param json - the block body.
  * @returns the parsed schema, or undefined when the text is not a schema object.
  */
 function parseDefinition(json: string): ToolSchemaLike | undefined {
+  let value: unknown
   try {
-    const value: unknown = JSON.parse(json)
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
-    const candidate = value as Partial<ToolSchemaLike>
-    if (typeof candidate.name !== 'string' || typeof candidate.description !== 'string') return undefined
-    if (typeof candidate.parameters !== 'object' || candidate.parameters === null) return undefined
-    return candidate as ToolSchemaLike
-  } catch (error: unknown) {
-    void error
+    value = JSON.parse(json)
+  } catch {
     return undefined
   }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const candidate = value as Partial<ToolSchemaLike>
+  if (typeof candidate.name !== 'string' || typeof candidate.description !== 'string') return undefined
+  if (typeof candidate.parameters !== 'object' || candidate.parameters === null) return undefined
+  return candidate as ToolSchemaLike
 }
 
 /**
  * Fold every dynamic-tools message in delivery order.
- * Damaged blocks are ignored: an unreadable disclosure only costs one
- * re-announcement, never a wrong refusal.
+ * A damaged block still marks its name as announced, so the model keeps seeing
+ * the name; the definition is re-disclosed because it was never recorded.
  *
  * @param messages - derived session messages in model order.
  * @param kind - message source kind owned by this plugin.
@@ -73,32 +76,39 @@ function parseDefinition(json: string): ToolSchemaLike | undefined {
 export function foldDisclosed(messages: readonly FoldableMessage[], kind: string): DisclosedState {
   const disclosed = new Map<string, DisclosedEntry>()
   const loaded = new Set<string>()
+  const definitions = new Map<string, ToolSchemaLike>()
+  const damaged = new Set<string>()
   for (const message of messages) {
     if (message.source?.kind !== kind) continue
     const text = textOf(message)
     for (const name of matches(text, REMOVED)) {
       disclosed.delete(name)
       loaded.delete(name)
+      definitions.delete(name)
+      damaged.delete(name)
     }
-    const definitions = new Map<string, ToolSchemaLike>()
-    DEFINITION.lastIndex = 0
+    const parsed = new Map<string, ToolSchemaLike>()
     for (const match of text.matchAll(DEFINITION)) {
       const schema = parseDefinition(match[2] ?? '')
-      if (schema !== undefined) definitions.set(schema.name, schema)
+      if (schema === undefined) damaged.add(match[1] ?? '')
+      else parsed.set(schema.name, schema)
     }
     for (const name of matches(text, ADDED)) {
-      const schema = definitions.get(name)
+      const schema = parsed.get(name)
       if (schema === undefined) {
         disclosed.set(name, { signature: null, schema: false })
         continue
       }
       disclosed.set(name, { signature: toolSignature(schema), schema: true })
       loaded.add(name)
+      definitions.set(name, schema)
+      damaged.delete(name)
     }
-    for (const schema of definitions.values()) {
+    for (const schema of parsed.values()) {
       disclosed.set(schema.name, { signature: toolSignature(schema), schema: true })
       loaded.add(schema.name)
+      definitions.set(schema.name, schema)
     }
   }
-  return { disclosed, loaded }
+  return { disclosed, loaded, definitions, damaged: [...damaged] }
 }

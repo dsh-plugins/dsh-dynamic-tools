@@ -45,6 +45,12 @@ export interface Config {
         /** Announce tools that stop being available. */
         announceRemovals: boolean;
     };
+    declareOnLoad: {
+        /** Model-id patterns whose routes declare loaded tools instead of reading the tail. */
+        models: string[];
+        /** Provider-route patterns restricted to that handling; empty matches every provider. */
+        providers: string[];
+    };
     /** Model-facing reason reported when a declared tool is not admitted. */
     unavailableReasons: Record<string, string>;
     /** Concurrency used when the loop supplies no limit. */

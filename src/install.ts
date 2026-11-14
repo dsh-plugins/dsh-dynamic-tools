@@ -65,6 +65,7 @@ export function installAgent(
   const holder = {
     disclosed: () => currentState(agent, options.sourceKind).disclosed,
     loaded: () => currentState(agent, options.sourceKind).loaded,
+    definitions: () => currentState(agent, options.sourceKind).definitions,
   }
   const executor = new StableCatalogExecutor(ctx, agent, options.rules, options.executor, holder)
   try {

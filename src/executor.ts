@@ -7,6 +7,12 @@
  * through tail disclosure, but only while the step admits them: an unadmitted
  * call is reported as an executable denial before policy and approval run.
  *
+ * Routes that call only declared tools need the second half: a definition the
+ * model loaded through `tool_load` is appended to the declaration head, so the
+ * model can invoke it natively. The addition is monotone — a loaded tool keeps
+ * its declaration for the rest of the session — so the head changes once per
+ * loaded tool instead of once per admission change.
+ *
  * @module dsh-dynamic-tools/executor
  */
 
@@ -23,9 +29,15 @@ import type {
   ToolModelInput,
 } from '@deepseek-ai/dsh-tools'
 import type { ScopeKey } from '@deepseek-ai/dsh-scope'
-import { classifyTool, type ClassificationRules, type ToolSchemaLike } from './catalog.ts'
+import {
+  classifyTool,
+  extendCatalog,
+  type ClassificationRules,
+  type ToolSchemaLike,
+} from './catalog.ts'
 import type { DisclosedEntry } from './disclosure.ts'
 import { loadFirstReason, unavailableReason } from './render.ts'
+import { selectStrategy, type StrategyRules, type ToolStrategy } from './strategy.ts'
 
 /** Delivered disclosure state shared with the pre-step listener. */
 export interface DisclosureStateHandle {
@@ -33,6 +45,8 @@ export interface DisclosureStateHandle {
   disclosed(): ReadonlyMap<string, DisclosedEntry>
   /** Names whose definition was delivered through `tool_load`. */
   loaded(): ReadonlySet<string>
+  /** Definitions the model has read, in delivery order. */
+  definitions(): ReadonlyMap<string, ToolSchemaLike>
 }
 
 /** Runtime settings the executor reads on every step. */
@@ -43,6 +57,10 @@ export interface ExecutorOptions {
   readonly unavailableReasons: Readonly<Record<string, string>>
   /** Concurrency used when the loop supplies none. */
   readonly maxParallelCalls: number
+  /** Route matching rules for the declare-on-load strategy. */
+  readonly strategyRules: StrategyRules
+  /** Name of the tool that delivers a definition on demand. */
+  readonly loadToolName: string
 }
 
 /**
@@ -57,6 +75,10 @@ export class StableCatalogExecutor implements ToolExecutor {
   private lastAdmitted: readonly ToolDefinition[] = []
   /** Names the current batch's step admits. */
   private admittedNames: ReadonlySet<string> = new Set()
+  /** Strategy settled by the current step's assembly, so every reader agrees. */
+  private stepStrategy: ToolStrategy | undefined
+  /** Whether the missing-load-tool diagnostic was already reported. */
+  private loadWarningReported = false
 
   constructor(
     private readonly ctx: Context,
@@ -66,9 +88,12 @@ export class StableCatalogExecutor implements ToolExecutor {
     private readonly state: DisclosureStateHandle,
   ) {}
 
-  /** Names the frozen head declares; empty before the first assembly. */
+  /** Names the frozen head declares, plus every loaded tool on a declare route. */
   declaredNames(): ReadonlySet<string> {
-    return this.catalogNames
+    if (this.planStrategy() !== 'declare') return this.catalogNames
+    const names = new Set(this.catalogNames)
+    for (const name of this.state.definitions().keys()) names.add(name)
+    return names
   }
 
   /** Definitions the current step admits, captured by the last assembly. */
@@ -77,7 +102,8 @@ export class StableCatalogExecutor implements ToolExecutor {
   }
 
   /**
-   * Capture the head from the first assembly, then return it unchanged.
+   * Capture the head from the first assembly, then return it unchanged, plus
+   * every loaded definition on a declare route.
    * The first assembly's admission is exactly the declaration set the session
    * starts with, so the head matches what every later request would have
    * declared while the tool set is unchanged.
@@ -86,13 +112,11 @@ export class StableCatalogExecutor implements ToolExecutor {
    */
   describe(tools: readonly ToolDefinition[]): ToolModelInput {
     this.lastAdmitted = tools
-    if (this.catalog === undefined) {
-      this.catalog = Object.freeze(tools
-        .filter(definition => classifyTool(definition.name, this.rules) === 'inline')
-        .map(definition => Object.freeze(projectToolSchema(definition, true))))
-      for (const schema of this.catalog) this.catalogNames.add(schema.name)
-    }
-    return { schemas: [...this.catalog] }
+    this.stepStrategy = selectStrategy(this.agent.model.current(), this.options.strategyRules)
+    const catalog = this.catalog ?? this.capture(tools)
+    if (this.stepStrategy !== 'declare') return { schemas: [...catalog] }
+    this.reportMissingLoadTool()
+    return { schemas: this.withDeclared(catalog) }
   }
 
   /**
@@ -107,6 +131,66 @@ export class StableCatalogExecutor implements ToolExecutor {
       reject: (name: string) => this.reject(name),
     })
     return executeToolBatch(input, pipeline, () => input.maxParallelToolCalls ?? this.options.maxParallelCalls)
+  }
+
+  /**
+   * How this step's route receives dynamic tools.
+   *
+   * The assembly that described this step's head fixes it once. Every later
+   * reader in the same step — declaration names, the load requirement, the
+   * disclosure listener — sees that one decision, so a model switch cannot make
+   * the head and the announcement disagree.
+   * @returns the recorded strategy, or the current route's before any assembly.
+   */
+  planStrategy(): ToolStrategy {
+    return this.stepStrategy ?? selectStrategy(this.agent.model.current(), this.options.strategyRules)
+  }
+
+  /**
+   * Capture the declaration head from the first assembly.
+   * @param tools - definitions the first assembly admits.
+   * @returns the frozen model-facing catalog.
+   */
+  private capture(tools: readonly ToolDefinition[]): readonly ToolSchemaLike[] {
+    const catalog = Object.freeze(tools
+      .filter(definition => classifyTool(definition.name, this.rules) === 'inline')
+      .map(definition => Object.freeze(projectToolSchema(definition, true))))
+    this.catalog = catalog
+    for (const schema of catalog) this.catalogNames.add(schema.name)
+    return catalog
+  }
+
+  /**
+   * Append every loaded definition to the frozen head.
+   * A loaded tool the step still admits uses its live definition, so argument
+   * validation matches the call it will run; a tool that no longer admits keeps
+   * the definition the model read, because the head must not shrink.
+   * @param catalog - frozen declaration head.
+   * @returns the head followed by the loaded definitions, in load order.
+   */
+  private withDeclared(catalog: readonly ToolSchemaLike[]): ToolSchemaLike[] {
+    const live = new Map(this.lastAdmitted.map(definition => [definition.name, definition]))
+    const declared: ToolSchemaLike[] = []
+    for (const [name, recorded] of this.state.definitions()) {
+      if (this.catalogNames.has(name)) continue
+      const current = live.get(name)
+      declared.push(Object.freeze(current === undefined ? recorded : projectToolSchema(current, true)))
+    }
+    return extendCatalog(catalog, declared)
+  }
+
+  /**
+   * Report once that a declare route cannot load anything because the frozen
+   * head does not declare the load tool.
+   */
+  private reportMissingLoadTool(): void {
+    if (this.loadWarningReported || this.catalogNames.has(this.options.loadToolName)) return
+    this.loadWarningReported = true
+    this.ctx.logger.warn(
+      'dsh-dynamic-tools: agent "%s" declares loaded tools in its tool list, but "%s" is absent from its frozen head; dynamic tools cannot be loaded in this session',
+      this.agent.id,
+      this.options.loadToolName,
+    )
   }
 
   /**
@@ -136,10 +220,15 @@ export class StableCatalogExecutor implements ToolExecutor {
    */
   private reject(name: string): Error | undefined {
     if (this.admittedNames.has(name)) {
-      if (this.catalogNames.has(name) || !this.options.requireLoad) return undefined
+      if (this.catalogNames.has(name) || !this.requiresLoad()) return undefined
       return this.state.loaded().has(name) ? undefined : new Error(loadFirstReason(name))
     }
     if (!this.catalogNames.has(name) && !this.state.disclosed().has(name)) return undefined
     return new Error(unavailableReason(name, this.options.unavailableReasons[name]))
+  }
+
+  /** Whether a dynamic tool must be loaded before it may run on this route. */
+  private requiresLoad(): boolean {
+    return this.options.requireLoad || this.planStrategy() === 'declare'
   }
 }

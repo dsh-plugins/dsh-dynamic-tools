@@ -7,8 +7,12 @@
 
 import type { ToolSchemaLike } from './catalog.ts'
 import type { DisclosureBatch } from './disclosure.ts'
+import type { ToolStrategy } from './strategy.ts'
 
 const CLOSING_TAG = /<\//g
+
+/** What the model must do with a definition attached to the disclosure. */
+const DIRECT_CALL_TRAILER = 'These tools are callable directly by name even though they are not in your tool list; match the definitions above.'
 
 /**
  * Keep tool prose from closing a wrapper or block early. JSON accepts the
@@ -31,10 +35,16 @@ export function oneLine(text: string): string {
 
 /**
  * Render one disclosure batch.
+ *
+ * An attached definition is only ever planned in `schema` mode, which the
+ * declare-on-load strategy never uses, so it always carries the direct-call
+ * instruction.
+ *
  * @param batch - definitions, name-only entries, and removals.
+ * @param strategy - how this route receives dynamic tools.
  * @returns the complete user-message text.
  */
-export function renderDisclosure(batch: DisclosureBatch): string {
+export function renderDisclosure(batch: DisclosureBatch, strategy: ToolStrategy): string {
   const sections: string[] = []
   const announced: string[] = []
   for (const schema of batch.added) announced.push(`- ${schema.name}: ${oneLine(escapeReminderText(schema.description))}`)
@@ -50,11 +60,11 @@ export function renderDisclosure(batch: DisclosureBatch): string {
     sections.push(`<tools_removed>\n${batch.removed.map(name => `- ${name}`).join('\n')}\n</tools_removed>`)
   }
   const trailers: string[] = []
-  if (batch.added.length > 0) {
-    trailers.push('These tools are callable directly by name even though they are not in your tool list; match the definitions above.')
-  }
+  if (batch.added.length > 0) trailers.push(DIRECT_CALL_TRAILER)
   if (batch.names.length > 0) {
-    trailers.push('Call tool_load with the names under tools_load_required before calling those tools.')
+    trailers.push(strategy === 'declare'
+      ? 'Call tool_load with the names under tools_load_required — also when you need to read what a tool does. A loaded tool is added to your tool list for later steps.'
+      : 'Call tool_load with the names under tools_load_required before calling those tools.')
   }
   if (batch.removed.length > 0) {
     trailers.push('Removed tools are unavailable; they fail if called.')
@@ -66,10 +76,14 @@ export function renderDisclosure(batch: DisclosureBatch): string {
 /**
  * Render the definitions `tool_load` returns for one tool.
  * @param schema - the definition to deliver.
+ * @param strategy - how this route receives dynamic tools.
  * @returns the complete user-message text.
  */
-export function renderLoadedDefinition(schema: ToolSchemaLike): string {
-  return `<system-reminder>\n<tool_definition name="${schema.name}">\n${escapeReminderText(JSON.stringify(schema))}\n</tool_definition>\nThese tools are callable directly by name even though they are not in your tool list; match the definitions above.\n</system-reminder>`
+export function renderLoadedDefinition(schema: ToolSchemaLike, strategy: ToolStrategy): string {
+  const trailer = strategy === 'declare'
+    ? 'This tool is declared in your tool list from the next step on; call it directly by name.'
+    : DIRECT_CALL_TRAILER
+  return `<system-reminder>\n<tool_definition name="${schema.name}">\n${escapeReminderText(JSON.stringify(schema))}\n</tool_definition>\n${trailer}\n</system-reminder>`
 }
 
 /**

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { classifyTool, schemaBytes, splitCatalog, toolSignature } from '../src/catalog.ts'
+import { classifyTool, extendCatalog, schemaBytes, splitCatalog, toolSignature } from '../src/catalog.ts'
 
 const rules = {
   dynamicNames: ['exit_plan_mode'],
@@ -35,6 +35,19 @@ test('splitCatalog separates the frozen head from dynamic disclosures', () => {
   assert.deepEqual(split.dynamic.map(schema => schema.name), ['exit_plan_mode', 'mcp__srv__run'])
 })
 
+test('extendCatalog appends declared tools without moving a declared name', () => {
+  const catalog = [{ name: 'read', description: 'read a file', parameters: {} }]
+  const declared = [
+    { name: 'read', description: 'the live definition', parameters: { type: 'object' } },
+    { name: 'mcp__srv__run', description: 'remote tool', parameters: {} },
+    { name: 'mcp__srv__run', description: 'a second registration', parameters: {} },
+  ]
+  const extended = extendCatalog(catalog, declared)
+  assert.deepEqual(extended.map(schema => schema.name), ['read', 'mcp__srv__run'])
+  assert.equal(extended[0], catalog[0])
+  assert.equal(extended[1], declared[1])
+})
+
 test('toolSignature ignores parameter key order but not values', () => {
   const left = { name: 't', description: 'd', parameters: { a: 1, b: { c: 2, d: 3 } } }
   const right = { name: 't', description: 'd', parameters: { b: { d: 3, c: 2 }, a: 1 } }
@@ -43,11 +56,12 @@ test('toolSignature ignores parameter key order but not values', () => {
   assert.notEqual(toolSignature(left), toolSignature({ ...left, parameters: { a: 2, b: { c: 2, d: 3 } } }))
 })
 
-test('schemaBytes measures UTF-8 bytes rather than characters', () => {
-  const ascii = { name: 't', description: 'abc', parameters: {} }
+test('schemaBytes measures UTF-8 bytes rather than UTF-16 code units', () => {
+  const ascii = { name: 't', description: 'ab', parameters: {} }
   const wide = { name: 't', description: '中文', parameters: {} }
-  assert.equal(schemaBytes(ascii), JSON.stringify(ascii).length)
-  assert.ok(schemaBytes(wide) > JSON.stringify(wide).length - 1)
-  assert.equal(schemaBytes(wide), new TextEncoder().encode(JSON.stringify(wide)).length)
+  // Two code units either way; each CJK character costs three UTF-8 bytes
+  // against one for ASCII, so the wide description adds exactly four bytes.
+  assert.equal(JSON.stringify(ascii).length, JSON.stringify(wide).length)
+  assert.equal(schemaBytes(wide) - schemaBytes(ascii), 4)
 })
 

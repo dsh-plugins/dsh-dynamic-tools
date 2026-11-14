@@ -20,6 +20,7 @@ import { registerDisclosure, type DiscloseOptions } from './disclose.ts'
 import type { StableCatalogExecutor } from './executor.ts'
 import { installAgent, type InstallOptions } from './install.ts'
 import { SOURCE_KIND } from './source.ts'
+import { DEFAULT_DECLARE_MODELS, type StrategyRules, type ToolStrategy } from './strategy.ts'
 import { createToolLoad, TOOL_LOAD_NAME } from './tool-load.ts'
 
 /** Cordis plugin name. */
@@ -56,6 +57,12 @@ export interface Config {
     /** Announce tools that stop being available. */
     announceRemovals: boolean
   }
+  declareOnLoad: {
+    /** Model-id patterns whose routes declare loaded tools instead of reading the tail. */
+    models: string[]
+    /** Provider-route patterns restricted to that handling; empty matches every provider. */
+    providers: string[]
+  }
   /** Model-facing reason reported when a declared tool is not admitted. */
   unavailableReasons: Record<string, string>
   /** Concurrency used when the loop supplies no limit. */
@@ -90,6 +97,12 @@ export const Config: z<Config> = z.object({
     announceRemovals: z.boolean().default(true)
       .description('Announce tools that stop being available.'),
   }).default({}),
+  declareOnLoad: z.object({
+    models: z.array(z.string()).default([...DEFAULT_DECLARE_MODELS])
+      .description('Model-id patterns whose routes call only declared tools; dynamic tools are loaded on demand there.'),
+    providers: z.array(z.string()).default([])
+      .description('Provider-route patterns restricted to that handling; empty matches every provider.'),
+  }).default({}),
   unavailableReasons: z.dict(z.string()).default({
     exit_plan_mode: 'Plan mode is not active in this session. Ask the user to switch to plan mode, then call it again.',
   }).description('Model-facing reason reported when a declared tool is not admitted.'),
@@ -104,16 +117,27 @@ export const Config: z<Config> = z.object({
  */
 function resolveSettings(config: Config): {
   rules: ClassificationRules
+  strategyRules: StrategyRules
   install: Omit<InstallOptions, 'executors' | 'reported'>
-  disclose: Omit<DiscloseOptions, 'catalogNames' | 'admitted'>
+  disclose: Omit<DiscloseOptions, 'strategy' | 'catalogNames' | 'admitted'>
 } {
+  const strategyRules: StrategyRules = {
+    models: config.declareOnLoad.models,
+    providers: config.declareOnLoad.providers,
+  }
+  // A route that declares loaded tools needs the loader in its head, so a
+  // deployment cannot classify it onto the tail and lose the only path in.
+  const inlineNames = config.dynamic.inlineNames.includes(TOOL_LOAD_NAME)
+    ? config.dynamic.inlineNames
+    : [...config.dynamic.inlineNames, TOOL_LOAD_NAME]
   const rules: ClassificationRules = {
     dynamicNames: config.dynamic.names,
     dynamicPrefixes: config.dynamic.prefixes,
-    inlineNames: config.dynamic.inlineNames,
+    inlineNames,
   }
   return {
     rules,
+    strategyRules,
     install: {
       sourceKind: SOURCE_KIND,
       rules,
@@ -121,6 +145,8 @@ function resolveSettings(config: Config): {
         requireLoad: config.disclosure.requireLoad,
         unavailableReasons: config.unavailableReasons,
         maxParallelCalls: config.maxParallelCalls,
+        strategyRules,
+        loadToolName: TOOL_LOAD_NAME,
       },
       skipPresets: config.skipPresets,
     },
@@ -148,10 +174,14 @@ export function apply(ctx: Context, config: Config): void {
   const release = new WeakMap<Agent, () => void>()
   const reported = new WeakSet<Agent>()
   const installOptions: InstallOptions = { ...settings.install, executors, reported }
+  const strategyOf = (agent: Agent): ToolStrategy | undefined => executors.get(agent)?.planStrategy()
+  const declaredNamesOf = (agent: Agent): ReadonlySet<string> => executors.get(agent)?.declaredNames() ?? new Set()
 
   ctx.effect(() => ctx.tools.register(createToolLoad(ctx, {
     sourceKind: SOURCE_KIND,
     limits: settings.disclose.limits,
+    strategy: strategyOf,
+    declaredNames: declaredNamesOf,
   })), `dsh-dynamic-tools: register ${TOOL_LOAD_NAME}`)
 
   ctx.on('agent/created', ({ agent }) => {
@@ -172,7 +202,8 @@ export function apply(ctx: Context, config: Config): void {
 
   registerDisclosure(ctx, {
     ...settings.disclose,
-    catalogNames: agent => executors.get(agent)?.declaredNames() ?? new Set(),
+    strategy: strategyOf,
+    catalogNames: declaredNamesOf,
     admitted: agent => executors.get(agent)?.admittedDefinitions(),
   })
 }

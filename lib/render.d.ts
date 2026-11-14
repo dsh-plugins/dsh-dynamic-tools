@@ -6,6 +6,7 @@
  */
 import type { ToolSchemaLike } from './catalog.ts';
 import type { DisclosureBatch } from './disclosure.ts';
+import type { ToolStrategy } from './strategy.ts';
 /**
  * Keep tool prose from closing a wrapper or block early. JSON accepts the
  * resulting backslash-slash escape, so a definition body stays parseable.
@@ -21,16 +22,23 @@ export declare function escapeReminderText(text: string): string;
 export declare function oneLine(text: string): string;
 /**
  * Render one disclosure batch.
+ *
+ * An attached definition is only ever planned in `schema` mode, which the
+ * declare-on-load strategy never uses, so it always carries the direct-call
+ * instruction.
+ *
  * @param batch - definitions, name-only entries, and removals.
+ * @param strategy - how this route receives dynamic tools.
  * @returns the complete user-message text.
  */
-export declare function renderDisclosure(batch: DisclosureBatch): string;
+export declare function renderDisclosure(batch: DisclosureBatch, strategy: ToolStrategy): string;
 /**
  * Render the definitions `tool_load` returns for one tool.
  * @param schema - the definition to deliver.
+ * @param strategy - how this route receives dynamic tools.
  * @returns the complete user-message text.
  */
-export declare function renderLoadedDefinition(schema: ToolSchemaLike): string;
+export declare function renderLoadedDefinition(schema: ToolSchemaLike, strategy: ToolStrategy): string;
 /**
  * Render the model-facing result of one `tool_load` call.
  * @param loaded - names whose definitions were delivered.

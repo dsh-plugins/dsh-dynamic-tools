@@ -2,7 +2,7 @@
   "name": "@dsh-plugin/dsh-dynamic-tools",
   "version": "0.1.0",
   "type": "module",
-  "description": "Keeps the tool declaration head of a request frozen and discloses tools registered later as trailing context, so mid-conversation tool changes stop invalidating the cached prompt prefix.",
+  "description": "Keeps the tool declaration head of a request frozen and discloses tools registered later as trailing context, so mid-conversation tool changes stop invalidating the cached prompt prefix; routes that call only declared tools load those definitions on demand and get them declared instead.",
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
