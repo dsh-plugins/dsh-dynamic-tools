@@ -55,9 +55,10 @@ export interface Config {
     /** Provider-route patterns restricted to that handling; empty matches every provider. */
     providers: string[]
   }
+  /** 仅显式配置的 HTTP/SSE Responses 路由使用 additional_tools。 */
   responses: {
-    /** 仅显式配置的 HTTP/SSE Responses 路由使用 additional_tools。 */
     routes: { provider: string, models: string[] }[]
+    overrides?: { provider: string, model: string, enabled: boolean }[]
   }
   /** Model-facing reason reported when a declared tool is not admitted. */
   unavailableReasons: Record<string, string>
@@ -104,6 +105,11 @@ export const Config: z<Config> = z.object({
       provider: z.string().required(),
       models: z.array(z.string()).default([]),
     })).default([]),
+    overrides: z.array(z.object({
+      provider: z.string().required(),
+      model: z.string().required(),
+      enabled: z.boolean().default(false),
+    })).default([]),
   }).default({}),
   unavailableReasons: z.dict(z.string()).default({
     exit_plan_mode: 'Plan mode is not active in this session. Ask the user to switch to plan mode, then call it again.',
@@ -127,6 +133,7 @@ function resolveSettings(config: Config): {
     models: config.declareOnLoad.models,
     providers: config.declareOnLoad.providers,
     get responses() { return config.responses.routes },
+    get responsesOverrides() { return config.responses.overrides },
   }
   // A route that declares loaded tools needs the loader in its head, so a
   // deployment cannot classify it onto the tail and lose the only path in.
@@ -185,6 +192,14 @@ export async function apply(ctx: Context & { dshLoader: HostAPI }, config: Confi
       item: { type: 'object', label: '路由', fields: [
         { type: 'text', key: 'provider', label: 'Provider ID', required: true },
         { type: 'array', key: 'models', label: '模型规则', default: [], item: { type: 'text', label: '模型规则' } },
+      ] },
+    }, {
+      type: 'array', key: 'overrides', label: '模型卡片选择', default: (config.responses.overrides ?? []).map(item => ({ ...item })),
+      description: '模型卡片的精确选择优先于启用路由；删除对应项后恢复通配规则。',
+      item: { type: 'object', label: '模型', fields: [
+        { type: 'text', key: 'provider', label: 'Provider ID', required: true },
+        { type: 'text', key: 'model', label: '模型 ID', required: true },
+        { type: 'boolean', key: 'enabled', label: '启用原生工具路由', default: false },
       ] },
     }] }],
   })

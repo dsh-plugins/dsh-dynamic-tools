@@ -9,6 +9,19 @@ export interface ResponsesRoute {
   readonly models: readonly string[]
 }
 
+/** 模型卡片的精确选择优先于通配路由，关闭单个模型时保留其它模型的规则。 */
+export interface ResponsesOverride {
+  readonly provider: string
+  readonly model: string
+  readonly enabled: boolean
+}
+
+/** 原生路由和模型卡片共同使用的持久化设置。 */
+export interface ResponsesSettings {
+  readonly routes: readonly ResponsesRoute[]
+  readonly overrides?: readonly ResponsesOverride[]
+}
+
 /** Route matching rules for the declare-on-load strategy. */
 export interface StrategyRules {
   /** Model-id patterns; an empty list matches every model. */
@@ -16,6 +29,7 @@ export interface StrategyRules {
   /** Provider-route patterns; an empty list matches every provider. */
   readonly providers: readonly string[]
   readonly responses?: readonly ResponsesRoute[]
+  readonly responsesOverrides?: readonly ResponsesOverride[]
 }
 
 /** Model families whose routes call only tools declared in the request. */
@@ -51,6 +65,23 @@ function matchesAny(patterns: readonly string[], value: string): boolean {
   return patterns.length === 0 || patterns.some(pattern => patternMatches(pattern, value))
 }
 
+/** 模型卡片与执行器共用优先级，避免界面状态和实际请求策略不一致。 */
+export function responsesEnabled(selection: { readonly provider: string, readonly model: string }, settings: ResponsesSettings): boolean {
+  const override = settings.overrides?.findLast(item => item.provider === selection.provider && item.model === selection.model)
+  return override?.enabled ?? settings.routes.some(route => route.provider === selection.provider && matchesAny(route.models, selection.model))
+}
+
+/** 替换单个模型的选择，不展开通配规则，也不改动其它 provider 的同名模型。 */
+export function setResponsesOverride(settings: ResponsesSettings, selection: ResponsesOverride): ResponsesSettings {
+  return {
+    ...settings,
+    overrides: [
+      ...(settings.overrides ?? []).filter(item => item.provider !== selection.provider || item.model !== selection.model),
+      selection,
+    ],
+  }
+}
+
 /**
  * Decide how one step's route receives dynamic tools.
  *
@@ -66,7 +97,7 @@ export function selectStrategy(
   rules: StrategyRules,
 ): ToolStrategy {
   if (selection === undefined) { return 'tail' }
-  if (rules.responses?.some(route => route.provider === selection.provider && matchesAny(route.models, selection.model))) { return 'responses' }
+  if (responsesEnabled(selection, { routes: rules.responses ?? [], overrides: rules.responsesOverrides })) { return 'responses' }
   if (!matchesAny(rules.models, selection.model)) { return 'tail' }
   if (!matchesAny(rules.providers, selection.provider)) { return 'tail' }
   return 'declare'

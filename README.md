@@ -62,6 +62,10 @@ dsh plugin --profile web add C:/Projects/self/dsh-plugins/dsh-loader C:/Projects
 
 新增的 Responses 路由也可以在 loader 的“动态工具”配置卡片中保存，持久化路径为 `<profile>/config/dsh-dynamic-tools/config.json`。已有持久化值优先于 profile 中的初始默认值；保存后从下一步开始重新判定路由。其余既有配置仍在 profile 设置。
 
+模型设置中展开模型卡片，可勾选“启用原生工具路由”。勾选只修改当前 provider 的草稿；点击 provider 的“保存”并成功后才写入路由配置，取消或离开编辑器会丢弃草稿。折叠模型、调整顺序不会提前写入。新建 provider 需要先保存，再编辑其模型路由。provider 保存失败时可继续修改后重试；如果 provider 已保存而路由配置写入失败，页面会显示独立的重试提示。
+
+模型卡片使用 `responses.overrides` 保存精确的 provider/model 选择，优先于 `responses.routes` 的通配规则。取消勾选只关闭该模型的原生策略，不改变同一通配规则下的其它模型。删除对应 override 可恢复继承通配规则；关闭原生策略后继续按 `declareOnLoad` 和 `tail` 的顺序判定。
+
 | 字段 | 默认 | 行为 |
 | --- | --- | --- |
 | `installExistingAgents` | `true` | 对已存在的 Agent 安装执行器 |
@@ -76,6 +80,7 @@ dsh plugin --profile web add C:/Projects/self/dsh-plugins/dsh-loader C:/Projects
 | `disclosure.maxMessageBytes` | `20000` | 原生声明和通知按最终 UTF-8 文本大小分批；连单条通知也放不下时明确报错 |
 | `disclosure.announceRemovals` | `true` | 既有策略的移除公告开关；原生策略始终记录不可用通知 |
 | `responses.routes` | `[]` | 显式启用 `additional_tools` 的 provider/model 规则 |
+| `responses.overrides` | `[]` | 模型卡片的精确选择，`enabled` 优先于通配规则 |
 | `declareOnLoad.models` | GPT/o 系列规则 | 未命中原生规则时，匹配这些模型走按需顶层声明 |
 | `declareOnLoad.providers` | `[]` | 既有策略的 provider 通配规则，空表示不限 |
 | `unavailableReasons` | 含 `exit_plan_mode` | 未准入工具的模型可见拒绝原因 |

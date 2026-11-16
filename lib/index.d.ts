@@ -40,11 +40,16 @@ export interface Config {
         /** Provider-route patterns restricted to that handling; empty matches every provider. */
         providers: string[];
     };
+    /** 仅显式配置的 HTTP/SSE Responses 路由使用 additional_tools。 */
     responses: {
-        /** 仅显式配置的 HTTP/SSE Responses 路由使用 additional_tools。 */
         routes: {
             provider: string;
             models: string[];
+        }[];
+        overrides?: {
+            provider: string;
+            model: string;
+            enabled: boolean;
         }[];
     };
     /** Model-facing reason reported when a declared tool is not admitted. */
