@@ -13,9 +13,13 @@ import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { ClassificationRules } from './catalog.ts';
 import { StableCatalogExecutor, type ExecutorOptions } from './executor.ts';
+import type { DisclosureHistory } from './history.ts';
+import type { HostBindings } from './host.ts';
 import type { SourceKind } from './source.ts';
 /** Settings shared by every installed agent. */
 export interface InstallOptions {
+    readonly host: HostBindings;
+    readonly history: DisclosureHistory;
     /** Message source kind owned by this plugin. */
     readonly sourceKind: SourceKind;
     /** Classification rules for the frozen head. */

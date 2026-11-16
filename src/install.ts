@@ -14,11 +14,14 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ClassificationRules } from './catalog.ts'
 import { StableCatalogExecutor, type ExecutorOptions } from './executor.ts'
-import { currentState } from './disclose.ts'
+import type { DisclosureHistory } from './history.ts'
+import type { HostBindings } from './host.ts'
 import type { SourceKind } from './source.ts'
 
 /** Settings shared by every installed agent. */
 export interface InstallOptions {
+  readonly host: HostBindings
+  readonly history: DisclosureHistory
   /** Message source kind owned by this plugin. */
   readonly sourceKind: SourceKind
   /** Classification rules for the frozen head. */
@@ -36,7 +39,7 @@ export interface InstallOptions {
 /** Read the preset id an agent runs under, when a registry is composed. */
 function presetOf(ctx: Context, agent: Agent): string | undefined {
   const registry = ctx.get('agentPresets')
-  if (registry === undefined) return undefined
+  if (registry === undefined) { return undefined }
   return registry.presetForSession(agent.session) ?? undefined
 }
 
@@ -53,7 +56,7 @@ export function installAgent(
   options: InstallOptions,
   release: WeakMap<Agent, () => void>,
 ): void {
-  if (options.executors.has(agent)) return
+  if (options.executors.has(agent)) { return }
   const preset = presetOf(ctx, agent)
   if (preset !== undefined && options.skipPresets.includes(preset)) {
     if (!options.reported.has(agent)) {
@@ -63,11 +66,11 @@ export function installAgent(
     return
   }
   const holder = {
-    disclosed: () => currentState(agent, options.sourceKind).disclosed,
-    loaded: () => currentState(agent, options.sourceKind).loaded,
-    definitions: () => currentState(agent, options.sourceKind).definitions,
+    disclosed: () => options.history.read(agent, executor.planStrategy()).disclosed,
+    loaded: () => options.history.read(agent, executor.planStrategy()).loaded,
+    definitions: () => options.history.read(agent, executor.planStrategy()).definitions,
   }
-  const executor = new StableCatalogExecutor(ctx, agent, options.rules, options.executor, holder)
+  const executor: StableCatalogExecutor = new StableCatalogExecutor(ctx, agent, options.rules, options.executor, holder, options.host)
   try {
     const dispose = ctx.effect(() => {
       const uninstall = agent.ctx.tools.setExecutor(executor)
@@ -79,13 +82,14 @@ export function installAgent(
     }, 'dsh-dynamic-tools: install frozen-catalog executor')
     let released = false
     release.set(agent, () => {
-      if (released) return
+      if (released) { return }
       released = true
       release.delete(agent)
       dispose()
     })
   } catch (error: unknown) {
-    if (options.reported.has(agent)) return
+    if (executor.planStrategy() === 'responses') { throw error }
+    if (options.reported.has(agent)) { return }
     options.reported.add(agent)
     ctx.logger.warn('dsh-dynamic-tools: cannot install for agent "%s": %o', agent.id, error)
   }

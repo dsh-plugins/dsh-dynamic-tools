@@ -1,22 +1,7 @@
-/**
- * Frozen-catalog tool executor.
- *
- * The declaration head is captured once, when this executor is installed, and
- * returned unchanged for every later step, so a mid-conversation tool change
- * never rewrites the request prefix. Tools outside that head stay callable
- * through tail disclosure, but only while the step admits them: an unadmitted
- * call is reported as an executable denial before policy and approval run.
- *
- * Routes that call only declared tools need the second half: a definition the
- * model loaded through `tool_load` is appended to the declaration head, so the
- * model can invoke it natively. The addition is monotone — a loaded tool keeps
- * its declaration for the rest of the session — so the head changes once per
- * loaded tool instead of once per admission change.
- *
- * @module dsh-dynamic-tools/executor
- */
+/** 保持声明基线稳定，动态工具复用宿主执行管线，并按当步准入与已保存定义校验。 */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
+import type { HostBindings } from './host.ts';
 import type { ToolBatchInput, ToolBatchResult, ToolDefinition, ToolExecutor, ToolModelInput } from '@deepseek-ai/dsh-tools';
 import { type ClassificationRules, type ToolSchemaLike } from './catalog.ts';
 import type { DisclosedEntry } from './disclosure.ts';
@@ -52,7 +37,8 @@ export declare class StableCatalogExecutor implements ToolExecutor {
     private readonly rules;
     private readonly options;
     private readonly state;
-    /** Declaration head, captured by the first assembly and never replaced. */
+    private readonly host;
+    /** 连续原生步骤共用基线；从其它策略进入时以已保存请求头重新建立基线。 */
     private catalog;
     /** Names the head declares. */
     private readonly catalogNames;
@@ -62,19 +48,17 @@ export declare class StableCatalogExecutor implements ToolExecutor {
     private admittedNames;
     /** Strategy settled by the current step's assembly, so every reader agrees. */
     private stepStrategy;
+    private stepRoute;
     /** Whether the missing-load-tool diagnostic was already reported. */
     private loadWarningReported;
-    constructor(ctx: Context, agent: Agent, rules: ClassificationRules, options: ExecutorOptions, state: DisclosureStateHandle);
+    constructor(ctx: Context, agent: Agent, rules: ClassificationRules, options: ExecutorOptions, state: DisclosureStateHandle, host: HostBindings);
     /** Names the frozen head declares, plus every loaded tool on a declare route. */
     declaredNames(): ReadonlySet<string>;
     /** Definitions the current step admits, captured by the last assembly. */
     admittedDefinitions(): readonly ToolDefinition[];
     /**
-     * Capture the head from the first assembly, then return it unchanged, plus
-     * every loaded definition on a declare route.
-     * The first assembly's admission is exactly the declaration set the session
-     * starts with, so the head matches what every later request would have
-     * declared while the tool set is unchanged.
+     * 原生策略恢复已保存基线并冻结本步路由；连续步骤返回同一工具头部。
+     * declare 仍把已加载定义加入顶层，切回原生时按该已保存头部建立新基线。
      * @param tools - definitions this step admits, in registry order.
      * @returns the frozen model-facing catalog.
      */
@@ -95,6 +79,11 @@ export declare class StableCatalogExecutor implements ToolExecutor {
      * @returns the recorded strategy, or the current route's before any assembly.
      */
     planStrategy(): ToolStrategy;
+    /** 配置保存仅影响下次组装，发送时必须仍是本步捕获的原生路由。 */
+    matchesResponsesRoute(request: {
+        readonly provider: string;
+        readonly model: string;
+    }): boolean;
     /**
      * Capture the declaration head from the first assembly.
      * @param tools - definitions the first assembly admits.

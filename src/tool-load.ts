@@ -1,35 +1,25 @@
-/**
- * `tool_load`: deliver the definition of a tool the conversation announced but
- * the declaration head does not contain.
- *
- * The definition rides `exec.deferContext()`, so the loop logs it after this
- * tool's result and the next request carries it at the tail. On a route that
- * reads only declared tool lists, the next request also declares it.
- *
- * Only a name the model was actually told about is served: announcing is what
- * makes a definition fair game. Serving any registered name would let a guessed
- * name pull an unannounced definition into the head and keep it there.
- *
- * @module dsh-dynamic-tools/tool-load
- */
+/** tool_load 只加载已公告且当前准入的工具；声明通过 deferContext 保存后才生效。 */
 
-import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { defineTool, projectToolSchema, ToolContextUnavailableError } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
-import { schemaBytes } from './catalog.ts'
-import { withDefinition, type DisclosureLimits } from './disclosure.ts'
+import { schemaBytes, toolSignature } from './catalog.ts'
+import type { DisclosureLimits } from './disclosure.ts'
+import type { DisclosureHistory } from './history.ts'
+import type { HostBindings } from './host.ts'
+import { additionMessage, canLoadNative } from './responses.ts'
 import { renderLoadedDefinition, renderLoadResult } from './render.ts'
-import { currentState, storeState } from './disclose.ts'
 import type { SourceKind } from './source.ts'
+import { TOOL_LOAD_NAME } from './source.ts'
 import type { ToolStrategy } from './strategy.ts'
 
 /** Names this plugin owns; a deployment cannot shadow them. */
-export const TOOL_LOAD_NAME = 'tool_load'
+export { TOOL_LOAD_NAME } from './source.ts'
 
 /** Settings the load tool needs at call time. */
 export interface ToolLoadOptions {
+  readonly host: HostBindings
+  readonly history: DisclosureHistory
+  readonly admitted: (agent: Agent) => readonly ToolDefinition[] | undefined
   /** Message source kind owned by this plugin. */
   readonly sourceKind: SourceKind
   /** Validated disclosure limits; `maxSchemaBytes` caps a loaded definition. */
@@ -42,14 +32,14 @@ export interface ToolLoadOptions {
 
 /**
  * Create the `tool_load` definition.
- * @param ctx - plugin context, used to read the agent's visible tools.
  * @param options - source kind, limits, and the agent's declaration facts.
  * @returns the unregistered definition.
  */
-export function createToolLoad(ctx: Context, options: ToolLoadOptions): ToolDefinition {
+export function createToolLoad(options: ToolLoadOptions): ToolDefinition {
+  const { defineTool, projectToolSchema, ToolContextUnavailableError, createUserMessage } = options.host
   return defineTool({
     name: TOOL_LOAD_NAME,
-    description: 'Read the full definition of tools that are announced in this conversation but absent from your tool list. Pass their exact names. Definitions arrive as a user message after this result; on a route that loads tools on demand the tool is declared in your tool list from the next step on.',
+    description: '加载会话中已公布的工具完整定义，传入工具原名。定义在本次调用结果之后保存；Responses 路由从该历史位置追加原生声明，后续可按原名调用。',
     parameters: {
       names: {
         type: 'array',
@@ -86,8 +76,8 @@ export function createToolLoad(ctx: Context, options: ToolLoadOptions): ToolDefi
       const alreadyAvailable: string[] = []
       const unavailable: string[] = []
       const tooLarge: string[] = []
-      const definitions = new Map(ctx.tools.definitions(agent).map(definition => [definition.name, definition]))
-      let state = currentState(agent, options.sourceKind)
+      const definitions = new Map((options.admitted(agent) ?? []).map(definition => [definition.name, definition]))
+      const state = options.history.read(agent, strategy)
       const wanted = [...new Set(args.names.map(name => name.trim()).filter(name => name.length > 0))]
       for (const name of wanted) {
         const definition = definitions.get(name)
@@ -95,8 +85,9 @@ export function createToolLoad(ctx: Context, options: ToolLoadOptions): ToolDefi
           unavailable.push(name)
           continue
         }
-        if (declared.has(name)) {
-          // The definition is already in the tool list; repeating it adds nothing.
+        const schema = projectToolSchema(definition, true)
+        const known = state.definitions.get(name)
+        if ((strategy !== 'responses' && declared.has(name)) || (known && toolSignature(known) === toolSignature(schema))) {
           alreadyAvailable.push(name)
           continue
         }
@@ -106,19 +97,16 @@ export function createToolLoad(ctx: Context, options: ToolLoadOptions): ToolDefi
           unavailable.push(name)
           continue
         }
-        const schema = projectToolSchema(definition, true)
-        if (schemaBytes(schema) > options.limits.maxSchemaBytes) {
+        if (schemaBytes(schema) > options.limits.maxSchemaBytes || (strategy === 'responses' && !canLoadNative(schema, options.limits))) {
           tooLarge.push(name)
           continue
         }
         loaded.push(name)
-        state = withDefinition(state, schema)
-        exec.deferContext(createUserMessage({
+        exec.deferContext(strategy === 'responses' ? additionMessage(options.host, [schema]) : createUserMessage({
           content: [{ type: 'text', text: renderLoadedDefinition(schema, strategy) }],
           source: { kind: options.sourceKind, form: 'catalog' },
         }))
       }
-      storeState(agent, state)
       return { loaded, alreadyAvailable, unavailable, tooLarge }
     },
     isConcurrencySafe: () => false,

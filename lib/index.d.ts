@@ -1,17 +1,6 @@
-/**
- * Freeze the tool declaration head and disclose later tools at the conversation
- * tail.
- *
- * A model request whose tool list changes forces the agent loop to resend the
- * complete system prompt and declarations, which discards the provider's cached
- * prefix. This plugin keeps the head constant: the first step's declaration set
- * is captured, later admissions are delivered as recorded user messages, and a
- * call to a tool the step does not admit fails through an executable denial
- * instead of running.
- *
- * @module dsh-dynamic-tools
- */
-import z from '@deepseek-ai/schemastery';
+/** 冻结工具头部，按路由选择 Responses 原生追加、按需声明或尾部文本披露。 */
+import z from 'schemastery';
+import type { HostAPI } from '@dsh-plugin/dsh-loader';
 import type { Context } from '@deepseek-ai/cordis';
 /** Cordis plugin name. */
 export declare const name = "@dsh-plugin/dsh-dynamic-tools";
@@ -51,6 +40,13 @@ export interface Config {
         /** Provider-route patterns restricted to that handling; empty matches every provider. */
         providers: string[];
     };
+    responses: {
+        /** 仅显式配置的 HTTP/SSE Responses 路由使用 additional_tools。 */
+        routes: {
+            provider: string;
+            models: string[];
+        }[];
+    };
     /** Model-facing reason reported when a declared tool is not admitted. */
     unavailableReasons: Record<string, string>;
     /** Concurrency used when the loop supplies no limit. */
@@ -63,4 +59,6 @@ export declare const Config: z<Config>;
  * @param ctx - plugin context owning every registration.
  * @param config - validated plugin configuration.
  */
-export declare function apply(ctx: Context, config: Config): void;
+export declare function apply(ctx: Context & {
+    dshLoader: HostAPI;
+}, config: Config): Promise<void>;

@@ -1,25 +1,8 @@
-/**
- * Frozen-catalog tool executor.
- *
- * The declaration head is captured once, when this executor is installed, and
- * returned unchanged for every later step, so a mid-conversation tool change
- * never rewrites the request prefix. Tools outside that head stay callable
- * through tail disclosure, but only while the step admits them: an unadmitted
- * call is reported as an executable denial before policy and approval run.
- *
- * Routes that call only declared tools need the second half: a definition the
- * model loaded through `tool_load` is appended to the declaration head, so the
- * model can invoke it natively. The addition is monotone — a loaded tool keeps
- * its declaration for the rest of the session — so the head changes once per
- * loaded tool instead of once per admission change.
- *
- * @module dsh-dynamic-tools/executor
- */
+/** 保持声明基线稳定，动态工具复用宿主执行管线，并按当步准入与已保存定义校验。 */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { executeToolBatch, ToolExecutionPipeline } from '@deepseek-ai/dsh-tools/pipeline'
-import { projectToolSchema } from '@deepseek-ai/dsh-tools'
+import type { HostBindings } from './host.ts'
 import type {
   ResolvedToolSet,
   ToolBatchInput,
@@ -32,6 +15,7 @@ import type { ScopeKey } from '@deepseek-ai/dsh-scope'
 import {
   classifyTool,
   extendCatalog,
+  toolSignature,
   type ClassificationRules,
   type ToolSchemaLike,
 } from './catalog.ts'
@@ -67,7 +51,7 @@ export interface ExecutorOptions {
  * Executes the frozen declaration head plus admitted dynamic tools.
  */
 export class StableCatalogExecutor implements ToolExecutor {
-  /** Declaration head, captured by the first assembly and never replaced. */
+  /** 连续原生步骤共用基线；从其它策略进入时以已保存请求头重新建立基线。 */
   private catalog: readonly ToolSchemaLike[] | undefined
   /** Names the head declares. */
   private readonly catalogNames = new Set<string>()
@@ -77,6 +61,7 @@ export class StableCatalogExecutor implements ToolExecutor {
   private admittedNames: ReadonlySet<string> = new Set()
   /** Strategy settled by the current step's assembly, so every reader agrees. */
   private stepStrategy: ToolStrategy | undefined
+  private stepRoute: { readonly provider: string, readonly model: string } | undefined
   /** Whether the missing-load-tool diagnostic was already reported. */
   private loadWarningReported = false
 
@@ -86,13 +71,14 @@ export class StableCatalogExecutor implements ToolExecutor {
     private readonly rules: ClassificationRules,
     private readonly options: ExecutorOptions,
     private readonly state: DisclosureStateHandle,
+    private readonly host: HostBindings,
   ) {}
 
   /** Names the frozen head declares, plus every loaded tool on a declare route. */
   declaredNames(): ReadonlySet<string> {
-    if (this.planStrategy() !== 'declare') return this.catalogNames
+    if (this.planStrategy() !== 'declare') { return this.catalogNames }
     const names = new Set(this.catalogNames)
-    for (const name of this.state.definitions().keys()) names.add(name)
+    for (const name of this.state.definitions().keys()) { names.add(name) }
     return names
   }
 
@@ -102,19 +88,28 @@ export class StableCatalogExecutor implements ToolExecutor {
   }
 
   /**
-   * Capture the head from the first assembly, then return it unchanged, plus
-   * every loaded definition on a declare route.
-   * The first assembly's admission is exactly the declaration set the session
-   * starts with, so the head matches what every later request would have
-   * declared while the tool set is unchanged.
+   * 原生策略恢复已保存基线并冻结本步路由；连续步骤返回同一工具头部。
+   * declare 仍把已加载定义加入顶层，切回原生时按该已保存头部建立新基线。
    * @param tools - definitions this step admits, in registry order.
    * @returns the frozen model-facing catalog.
    */
   describe(tools: readonly ToolDefinition[]): ToolModelInput {
     this.lastAdmitted = tools
-    this.stepStrategy = selectStrategy(this.agent.model.current(), this.options.strategyRules)
+    const previousStrategy = this.stepStrategy
+    const selection = this.agent.model.current()
+    this.stepRoute = selection === undefined ? undefined : { provider: selection.provider, model: selection.model }
+    this.stepStrategy = selectStrategy(selection, this.options.strategyRules)
+    if (this.stepStrategy === 'responses' && previousStrategy !== 'responses') {
+      const header = this.agent.session.requestHeader()
+      if (header !== undefined) {
+        const recorded = header.tools ?? []
+        this.catalog = this.host.deepFreeze(structuredClone(recorded))
+        this.catalogNames.clear()
+        for (const schema of recorded) { this.catalogNames.add(schema.name) }
+      }
+    }
     const catalog = this.catalog ?? this.capture(tools)
-    if (this.stepStrategy !== 'declare') return { schemas: [...catalog] }
+    if (this.stepStrategy !== 'declare') { return { schemas: [...catalog] } }
     this.reportMissingLoadTool()
     return { schemas: this.withDeclared(catalog) }
   }
@@ -126,11 +121,11 @@ export class StableCatalogExecutor implements ToolExecutor {
    */
   execute(input: ToolBatchInput): Promise<ToolBatchResult> {
     this.admittedNames = new Set((input.toolSet?.view(this.agent) ?? new Map<string, ToolDefinition>()).keys())
-    const pipeline = new ToolExecutionPipeline(this.ctx, {
+    const pipeline = new this.host.ToolExecutionPipeline(this.ctx, {
       get: (name: string, scope: ScopeKey | undefined, toolSet: ResolvedToolSet | undefined) => this.resolve(name, scope, toolSet),
       reject: (name: string) => this.reject(name),
     })
-    return executeToolBatch(input, pipeline, () => input.maxParallelToolCalls ?? this.options.maxParallelCalls)
+    return this.host.executeToolBatch(input, pipeline, () => input.maxParallelToolCalls ?? this.options.maxParallelCalls)
   }
 
   /**
@@ -146,6 +141,11 @@ export class StableCatalogExecutor implements ToolExecutor {
     return this.stepStrategy ?? selectStrategy(this.agent.model.current(), this.options.strategyRules)
   }
 
+  /** 配置保存仅影响下次组装，发送时必须仍是本步捕获的原生路由。 */
+  matchesResponsesRoute(request: { readonly provider: string, readonly model: string }): boolean {
+    return this.stepStrategy === 'responses' && this.stepRoute?.provider === request.provider && this.stepRoute.model === request.model
+  }
+
   /**
    * Capture the declaration head from the first assembly.
    * @param tools - definitions the first assembly admits.
@@ -154,9 +154,9 @@ export class StableCatalogExecutor implements ToolExecutor {
   private capture(tools: readonly ToolDefinition[]): readonly ToolSchemaLike[] {
     const catalog = Object.freeze(tools
       .filter(definition => classifyTool(definition.name, this.rules) === 'inline')
-      .map(definition => Object.freeze(projectToolSchema(definition, true))))
+      .map(definition => this.host.deepFreeze(this.host.projectToolSchema(definition, true))))
     this.catalog = catalog
-    for (const schema of catalog) this.catalogNames.add(schema.name)
+    for (const schema of catalog) { this.catalogNames.add(schema.name) }
     return catalog
   }
 
@@ -172,9 +172,9 @@ export class StableCatalogExecutor implements ToolExecutor {
     const live = new Map(this.lastAdmitted.map(definition => [definition.name, definition]))
     const declared: ToolSchemaLike[] = []
     for (const [name, recorded] of this.state.definitions()) {
-      if (this.catalogNames.has(name)) continue
+      if (this.catalogNames.has(name)) { continue }
       const current = live.get(name)
-      declared.push(Object.freeze(current === undefined ? recorded : projectToolSchema(current, true)))
+      declared.push(Object.freeze(current === undefined ? recorded : this.host.projectToolSchema(current, true)))
     }
     return extendCatalog(catalog, declared)
   }
@@ -184,7 +184,7 @@ export class StableCatalogExecutor implements ToolExecutor {
    * head does not declare the load tool.
    */
   private reportMissingLoadTool(): void {
-    if (this.loadWarningReported || this.catalogNames.has(this.options.loadToolName)) return
+    if (this.loadWarningReported || this.catalogNames.has(this.options.loadToolName)) { return }
     this.loadWarningReported = true
     this.ctx.logger.warn(
       'dsh-dynamic-tools: agent "%s" declares loaded tools in its tool list, but "%s" is absent from its frozen head; dynamic tools cannot be loaded in this session',
@@ -207,8 +207,9 @@ export class StableCatalogExecutor implements ToolExecutor {
     toolSet: ResolvedToolSet | undefined,
   ): ToolDefinition | undefined {
     const admitted = toolSet?.view(scope).get(name)
-    if (admitted !== undefined) return admitted
-    if (!this.catalogNames.has(name) && !this.state.disclosed().has(name)) return undefined
+    if (admitted !== undefined) { return admitted }
+    if (!this.catalogNames.has(name) && !this.state.disclosed().has(name)
+      && !(this.planStrategy() === 'responses' && this.state.definitions().has(name))) { return undefined }
     return this.ctx.tools.definitions(this.agent).find(definition => definition.name === name)
   }
 
@@ -220,10 +221,17 @@ export class StableCatalogExecutor implements ToolExecutor {
    */
   private reject(name: string): Error | undefined {
     if (this.admittedNames.has(name)) {
-      if (this.catalogNames.has(name) || !this.requiresLoad()) return undefined
+      if (this.planStrategy() === 'responses') {
+        const current = this.lastAdmitted.find(definition => definition.name === name)
+        const declared = this.state.definitions().get(name) ?? this.catalog?.find(schema => schema.name === name)
+        if (!current || !declared || toolSignature(this.host.projectToolSchema(current, true)) !== toolSignature(declared)) { return new Error(loadFirstReason(name)) }
+        return undefined
+      }
+      if (this.catalogNames.has(name) || !this.requiresLoad()) { return undefined }
       return this.state.loaded().has(name) ? undefined : new Error(loadFirstReason(name))
     }
-    if (!this.catalogNames.has(name) && !this.state.disclosed().has(name)) return undefined
+    if (!this.catalogNames.has(name) && !this.state.disclosed().has(name)
+      && !(this.planStrategy() === 'responses' && this.state.definitions().has(name))) { return undefined }
     return new Error(unavailableReason(name, this.options.unavailableReasons[name]))
   }
 

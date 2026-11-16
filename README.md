@@ -1,151 +1,103 @@
 # Dynamic tools
 
-冻结会话首步的工具声明头部，把之后才出现的工具以对话尾部消息下发。这样中途的工具变化不再改写请求前缀，模型提供方的缓存可以继续复用。
+此插件固定会话的初始工具列表，并为显式配置的 Responses 路由在历史原位置追加 `additional_tools`，消除动态工具加载引起的顶层声明变化。
 
-对只调用 `tools` 数组内函数的模型（GPT 系列走 OpenAI Responses 协议），尾部文本读得到却调不了，因此另有一条「按需声明」通道：调用 `tool_load` 后再把该工具补进声明。见[GPT 系列路由](#gpt-系列路由按需声明)。
+## 路由与协议
 
-## 解决什么问题
+| 策略 | 动态定义的位置 | 加载后顶层 `tools` | 适用路由 |
+| --- | --- | --- | --- |
+| `responses` | `input` 中的原生 `additional_tools` | 保持初始基线 | 显式配置且支持该协议的 Responses HTTP/SSE 端点 |
+| `declare` | `tool_load` 后进入顶层声明 | 会变化，可能使旧缓存失效 | 命中 `declareOnLoad` 的其它路由 |
+| `tail` | 插件持久化的普通上下文消息 | 保持初始基线 | 能按文本定义调用工具的其它模型 |
 
-DSH 的 `agent-loop` 在工具集发生变化、且当前路由没有声明 `toolUpdate` 能力时，会开启新的请求序列并重发完整系统提示词与工具声明。`openai-responses` 系列路由的 `supportsAdditionalTools` 在 `dsh-llm-pi-ai` 中被固定为 `withhold`，无法在 profile 里打开，所以在这类路由上：
+优先级为 `responses` → `declare` → `tail`。`responses.routes` 默认为空，不能仅凭模型名推断端点支持原生追加。每条规则的 `provider` 精确匹配；`models` 支持现有的大小写不敏感 `*` 通配、整串匹配，空数组表示该 provider 的全部模型。provider、baseURL 和模型别名均可自定义，插件不限定 OpenAI 官方域名。
 
-- 进入计划模式时原生 `exit_plan_mode` 被准入 → 工具表变化 → 整个前缀失效；
-- MCP 服务器晚连接、插件热插拔、条件工具转为可用，都会造成同样的失效。
+`additional_tools` 与 `tool_search_output` 是两种不同协议。前者直接在指定历史位置引入工具；后者对应一次原生 `tool_search` 调用的检索结果，必须保留其调用关联。本插件已有精确工具名称与分类，使用前者，不伪造检索调用，也不把普通消息中的 JSON 当作原生声明。[OpenAI 工具加载文档](https://developers.openai.com/api/docs/guides/tools-tool-search#add-tools-at-a-specific-point-in-the-input)、[Codex 实现](https://github.com/openai/codex/blob/aea4c6ee4b652d84b416731b11c2b8299d767209/codex-rs/core/src/context/world_state/top_level_tools.rs#L215-L309)。
 
-本插件把声明头部固定下来：首步的声明集合被冻结，之后出现或被准入的工具通过尾部消息交给模型，模型仍可直接按名调用。只认声明列表的路由则走「按需声明」，多一次 `tool_load` 换取原生可调用。
+DSH 模型配置中的 `withhold` 限制 profile 手工填写对应能力字段；内置模型目录已有的能力值仍可继承。自定义 provider 和别名未必继承这些值，因此不能把 `withhold` 解释为所有 GPT 路由都禁用了原生动态工具。
 
-## 机制
+## 安装与开发
 
-1. **冻结头部**：每个 Agent 在首步组装时捕获其准入定义，剔除配置为动态的名字，深冻结后每一步原样返回。头部之后不再变化。
-2. **尾部披露**：`agent/pre-step` 在其它监听器之后运行，把"本步已准入但不在头部"的工具以一条用户消息披露；消息里既有名字清单，也有完整定义（`disclosure.mode: schema`），并带上"可直接按名调用"的说明。定义变化按签名检测后重披露，工具失去准入时追加 `<tools_removed>`。只注册、`when` 判为不可用的工具不会被公告——否则模型会去调用一个注定被拒的工具。
-3. **声明≠准入**：头部里的工具若本步未被准入（`when` 判定为假），调用会在策略与审批之前返回一条可执行错误，绝不执行。工具被撤下时 `UNKNOWN_TOOL`。
-4. **可见即记录**：披露消息带 `source.kind = dynamic-tools`，resume、fork、compaction 后由历史折叠重建；被压缩遮蔽的内容会在下一次开始时重发。
-5. **按需加载**：`disclosure.mode: names` 时只报名字，模型调用 `tool_load` 取完整定义；`disclosure.requireLoad` 可要求动态工具必须先加载才能执行。
-6. **按需声明**：命中 [`declareOnLoad`](#gpt-系列路由按需声明) 的路由把"已加载"的定义补进头部，让只认声明列表的模型也能调用动态工具。
-
-披露消息形状：
-
-```
-<system-reminder>
-<tools_added>
-- exit_plan_mode: Use only in plan mode. …
-</tools_added>
-
-<tool_definition name="exit_plan_mode">
-{"name":"exit_plan_mode","description":"…","parameters":{…}}
-</tool_definition>
-
-These tools are callable directly by name even though they are not in your tool list; match the definitions above.
-</system-reminder>
-```
-
-## GPT 系列路由：按需声明
-
-OpenAI Responses 系路由只调用请求 `tools` 数组里声明过的函数。把定义写进对话文本时，这类模型只把它当作对话内容：没有声明就没有可调用的名字，它也不会为了看不见的定义去 `tool_load`。本插件在这类路由上切到 `declare`：
-
-1. 动态工具被准入时只公告名字（`<tools_added>` 与 `<tools_load_required>`），不带完整定义。
-2. 模型调用 `tool_load`（在头部，必定可调用）拿到定义。
-3. 该工具从下一步起进入请求的 `tools` 声明，模型直接按名调用；参数校验用的正是它读到的定义。
-
-`tool_load` 只服务本会话公告过的名字：已注册但从未公告的工具（例如 `when` 判为不可用）返回 `Unavailable`，否则猜中的名字也会被永久塞进头部。`alreadyAvailable` 只表示"已在工具列表里"，不再重复下发。
-
-这与 codex 的 `tool_search` → `tool_search_output` → 调用是同一形态。区别只在 codex 用 BM25 检索候选，本插件的公告已经给出确切名字，因此少一次检索回合，也不需要索引。
-
-声明是单调的：已加载的工具此后一直留在头部，即使它失去准入或被注销。失去准入时调用返回 `unavailableReasons` 里的可执行拒绝，注销时得到 `UNKNOWN_TOOL`；头部不回撤，一次 `when` 抖动不会再把前缀打散。
-
-代价是「每个加载过的工具一次前缀变化」：首个动态工具加载后请求头发生变化（`request/header` 的 `reason` 为 `change`），前缀从该点重建，此后只要不再加载新工具就保持稳定。动态工具用得越多，这笔一次性的账越接近默认策略的收益。
-
-为什么不走原生 `tool_search`：`dsh-llm-pi-ai` 只在模型 compat 打开 `supportsToolSearch` 或 `supportsAdditionalTools` 时才把工具变化写成 `tool-addition`，而它对 `openai-responses`、`azure-openai-responses`、`openai-codex-responses` 三个协议把这两项固定标为 `withhold`，profile 打不开。所以这里由插件自己补一次声明。
-
-## 安装
+需要 `dsh-loader ^2.0.0-dev.43799314028`、DSH `>=0.2.2-rc.2 <0.3.0` 和 Node.js `>=24.9.0`。loader 的 `llm.registerResponsesToolAdditions` 提供原生追加接口，缺少该接口时插件明确报错。
 
 ```powershell
-npm install --ignore-scripts --legacy-peer-deps
+dsh plugin --profile web add @dsh-plugin/dsh-loader@next @dsh-plugin/dsh-dynamic-tools@next
+```
+
+原生 Responses 支持通过 `next` 渠道提供。验证本地代码时，在两个仓库构建后安装本地目录：
+
+```powershell
+# 在 dsh-loader 目录
+npm run build
+# 在 dsh-dynamic-tools 目录
+npm install --ignore-scripts
 npm run typecheck
 npm run build
 npm test
+# 替换为实际绝对路径和 profile
+dsh plugin --profile web add C:/Projects/self/dsh-plugins/dsh-loader C:/Projects/self/dsh-plugins/dsh-dynamic-tools
 ```
 
-源码在 `src/`，运行时加载提交在仓库里的 `lib/`。所有 `@deepseek-ai/*` 都是 `peerDependencies`：以目录链接方式安装时，Harness 只把祖先 `package.json` 中声明为 peer 的名字解析到安装副本；`devDependencies` 只供 `tsc` 使用。`npm test` 用 Node 24+ 的原生类型剥离直接运行 `tests/*.test.ts`，只需在源码改动后重新构建。
-
-通过 `plugin_manager` 的 `install_bundle` 安装本目录；`cordis.patch.yml` 插入一行 Host 入口：
-
-```yaml
-- insert:
-    - id: dynamic-tools
-      name: '@dsh-plugin/dsh-dynamic-tools'
-```
-
-以目录链接方式安装后，重新执行 `npm run build` **不会**让正在运行的实例换用新产物：模块 URL 不变，Node 的 ESM 缓存不会重新读盘，热重载也不重新导入它。改完源码并构建后需重启 dsh 实例，新会话才会加载新的 `lib/`。
+运行时代码通过 loader 获取宿主的工具定义、schema 投影、消息构造与执行管线。`@deepseek-ai/*` 的源码导入仅用于类型。动态工具仓库跟踪 `lib/`，修改源码后需要构建并重启测试实例；同一模块 URL 的热重载不会清除 Node.js ESM 缓存。
 
 ## 配置
 
 ```yaml
 - id: dynamic-tools
-  name: '@dsh-plugin/dsh-dynamic-tools'
   config:
     dynamic:
       names: ['exit_plan_mode']
       prefixes: ['mcp__']
     disclosure:
       mode: schema
+      requireLoad: false
+    responses:
+      routes:
+        - provider: mclans-gpt
+          models: ['gpt-*', 'my-gpt-alias']
     declareOnLoad:
       models: ['gpt*', 'o1*', 'o3*', 'o4*', 'chatgpt*', 'codex*']
       providers: []
 ```
 
-| 字段 | 默认 | 说明 |
-|---|---|---|
-| `installExistingAgents` | `true` | 加载时对已存在的 Agent 补装 |
-| `skipPresets` | `['ptc']` | 这些预设自带执行器，本插件不接管（PTC 只能看到 `run_code`） |
-| `dynamic.names` | `['exit_plan_mode']` | 永不进入头部的精确工具名 |
-| `dynamic.prefixes` | `[]` | 同上，按前缀匹配（如 `mcp__`） |
-| `dynamic.inlineNames` | `[]` | 强制进入头部，覆盖上面两条；`tool_load` 恒在其中 |
-| `disclosure.mode` | `schema` | `schema` 附完整定义；`names` 只报名字，需用 `tool_load` |
-| `disclosure.requireLoad` | `false` | 动态工具必须先 `tool_load` 才能执行 |
-| `disclosure.maxToolsPerMessage` | `8` | 单条披露消息的工具数 |
-| `disclosure.maxSchemaBytes` | `6000` | 单个定义上限，超出转为名字公告 |
-| `disclosure.maxMessageBytes` | `20000` | 单条消息上限，超出拆条 |
-| `disclosure.announceRemovals` | `true` | 工具失去准入时追加 `<tools_removed>` |
-| `declareOnLoad.models` | `['gpt*', 'o1*', 'o3*', 'o4*', 'chatgpt*', 'codex*']` | 命中这些模型名的路由改用按需声明 |
-| `declareOnLoad.providers` | `[]` | 同上，按路由名限制；空表示不限路由 |
-| `unavailableReasons` | `{ exit_plan_mode: … }` | 头部工具未准入时的模型可见原因 |
-| `maxParallelCalls` | `10` | 循环未给出并发上限时使用 |
+新增的 Responses 路由也可以在 loader 的“动态工具”配置卡片中保存，持久化路径为 `<profile>/config/dsh-dynamic-tools/config.json`。已有持久化值优先于 profile 中的初始默认值；保存后从下一步开始重新判定路由。其余既有配置仍在 profile 设置。
 
-分类只看名字，因为注册时的 `when` 条件对插件不可见；未列入 `dynamic` 的工具默认进入头部。工具一旦进入头部就保持声明，即使当前不可调用——这正是缓存稳定的代价与保证。
+| 字段 | 默认 | 行为 |
+| --- | --- | --- |
+| `installExistingAgents` | `true` | 对已存在的 Agent 安装执行器 |
+| `skipPresets` | `['ptc']` | 保留这些预设自己的执行器 |
+| `dynamic.names` | `['exit_plan_mode']` | 首次捕获时从静态头部排除的精确名称 |
+| `dynamic.prefixes` | `[]` | 按前缀排除，如 `mcp__` |
+| `dynamic.inlineNames` | `[]` | 强制进入初始头部；`tool_load` 始终列入 |
+| `disclosure.mode` | `schema` | 自动披露定义；`names` 只公告名称，等待 `tool_load` |
+| `disclosure.requireLoad` | `false` | 为 true 时只公告名称，加载成功并保存后才允许动态调用 |
+| `disclosure.maxToolsPerMessage` | `8` | 每条声明或通知的工具数上限 |
+| `disclosure.maxSchemaBytes` | `6000` | 单个 schema 的 UTF-8 字节上限 |
+| `disclosure.maxMessageBytes` | `20000` | 原生声明和通知按最终 UTF-8 文本大小分批；连单条通知也放不下时明确报错 |
+| `disclosure.announceRemovals` | `true` | 既有策略的移除公告开关；原生策略始终记录不可用通知 |
+| `responses.routes` | `[]` | 显式启用 `additional_tools` 的 provider/model 规则 |
+| `declareOnLoad.models` | GPT/o 系列规则 | 未命中原生规则时，匹配这些模型走按需顶层声明 |
+| `declareOnLoad.providers` | `[]` | 既有策略的 provider 通配规则，空表示不限 |
+| `unavailableReasons` | 含 `exit_plan_mode` | 未准入工具的模型可见拒绝原因 |
+| `maxParallelCalls` | `10` | 宿主未给出并发上限时使用 |
 
-`declareOnLoad` 的两个列表都支持 `*` 通配、大小写不敏感、整串匹配（`gpt*` 不匹配 `x-gpt-6`，`gpt-6.1*` 里的 `.` 是字面点）。两个列表为空表示强制所有路由走按需声明；策略按每一步的模型选择重算，中途切模型会随之切换。
+## 声明、执行与历史
 
-## 模型体验
+- `schema` 且未要求加载时，原生路由自动追加定义；`names` 或 `requireLoad: true` 时，`tool_load` 才生成追加记录。超过大小限制的原生定义只公告名称，加载返回 `tooLarge`，并记录诊断。
+- 接管旧会话时若静态加载入口 `tool_load` 缺失或定义升级，直接追加入口本身的原生定义，避免要求加载入口先加载自己；入口也受大小限制，无法容纳时明确报错。
+- 每次原生声明都是插件来源的用户消息，保存版本、稳定标识、完整 schema 和对应正文。loader 发送时在该消息原位置替换为 `{type: "additional_tools", role: "developer", tools: [...]}`，不再重复发送正文。
+- 来源、标识、正文与序列化位置必须一一对应。缺失、重复、伪造或映射不完整会停止请求。用户文本中的 schema 不会注册为工具。
+- 同名定义更新追加新记录，不改写旧记录。工具失去准入时保留已声明定义并追加不可用通知；实际执行始终按本步准入、最新已声明定义、宿主参数校验、权限和审批处理。
+- 重复加载已保存且未变化的定义返回 `alreadyAvailable`。预披露与尚未提交的 `deferContext` 不计入已加载状态。
+- resume、fork 从已记录的请求头恢复静态基线，按有效消息顺序折叠声明。compaction 删除的动态声明重新披露或加载，未丢失的历史声明不移动。旧文本格式在既有策略中继续按原语义读取；启用原生策略时以已保存的请求头建立基线，并重新记录仍缺少的原生声明。
+- 从其它策略进入原生策略时重新捕获已保存头部；连续原生步骤保持该基线。本步策略与 provider/model 在组装时固定，配置保存仅影响下一次组装。
 
-### 模型看到什么
+## 传输与缓存边界
 
-`tail` 路由：头部声明保持不变。动态工具在本步首次被准入时以一条 `<system-reminder>` 出现：名字 + 描述 + 完整 JSON 定义 + "可直接按名调用"的说明；移除时出现 `<tools_removed>`。`names` 模式下模型需先调 `tool_load`，定义在其结果之后作为用户消息到达。
+本实现仅转换 Responses HTTP/SSE，不为 WebSocket、Chat Completions 或只支持 `tool_search` 的端点启用该协议。显式原生路由被端点拒绝时报告错误，不自动回退到改变顶层工具列表的 `declare`。
 
-`declare` 路由：公告只给名字，说明改为"调用 `tool_load` 把名字加进工具列表，之后直接调用"；`tool_load` 的结果除了定义还会说明"从下一步起已声明"。
+loader 使用公开 `llm/stream` 事件建立 `AsyncLocalStorage` 请求作用域，并通过 `loader.patch.global('fetch', ...)` 与网络设置插件协作。转换支持取消、重试、并发会话隔离和卸载；辅助请求不参与转换。
 
-### Token 影响
+验收目标是消除工具加载导致的前缀变化。缓存命中仍受模型、路由、有效期、其它提示词变化等因素影响，不能保证每次 `cached_tokens` 都大于零。[OpenAI 缓存规则](https://developers.openai.com/api/docs/guides/prompt-caching)。跨策略切换、宿主其它提示词更新或历史压缩也可能改变可复用前缀。
 
-头部每步大小固定；披露只在工具真正增减时追加一次。相比每步重发全部声明，动态工具越多、会话越长，节省越明显。定义上限保护单条消息不被超大 schema 撑大。
-
-`declare` 路由上，每个被加载的工具会长期占据头部一份定义；只有确定要用的工具才值得加载一次。
-
-### KV Cache 影响
-
-`tail` 路由：前缀在会话内保持字节稳定，工具声明、系统提示词都不再随工具状态变化。这是本插件的全部目的——实测进入计划模式后，切换点的缓存命中读数保持在同一量级而不是归零。
-
-`declare` 路由：稳定区间是「两次加载之间」。每次 `tool_load` 生效后的下一步会重发一次声明与系统提示词（`request/header` 的 `reason` 为 `change`），此后不再变化。代价是模型必须先加载再调用，且披露本身会新增若干 token。
-
-## 已知限制
-
-- **首次捕获时机**：头部在 Agent 首步组装时捕获。若插件在会话中途安装，或 resume 后注册集合与历史头部不同，会出现一次头部变化，此后稳定。
-- **PTC 预设不接管**：PTC 只能用 `run_code`，其 SDK 文本随工具集变化；冻结 `tools:sdk` 不在本版范围。命中 `skipPresets` 时插件对该 Agent 完全让位并记录一次 info 日志。
-- **分类靠配置**：`when` 条件不可见，无法自动识别"条件工具"；动态名单需要按名称或前缀配置。
-- **路由匹配靠配置**：`declareOnLoad` 只认模型名与路由名；换供应商、改模型别名后需要同步，否则会退回 `tail` 策略而不是猜。
-- **会话中切模型会有一次头部变化**：从 `tail` 切到 `declare` 时，此前的披露已经算作"已加载"，这些工具会直接进入头部；反向切换则退回初始的冻结集合。两端都是一次性变化，之后各自稳定。
-- **声明单调**：`declare` 路由上加载过的工具不再回撤。工具注销后仍留在头部，调用得到 `UNKNOWN_TOOL`；这换来的是 `when` 抖动不打断缓存。
-- **`declare` 下强制名字公告**：该策略要把"已加载"当作声明依据，附完整定义会被记成已加载，因此 `disclosure.mode` 在该路由上不生效，首次切换时记录一条 info 日志。
-- **定义漂移**：已加载且仍准入的工具，声明用注册表里的实时定义（保证参数校验与执行一致），可能与模型当初读到的版本不同。
-- **超大定义**：超过 `maxSchemaBytes` 的工具在 `tail` 路由仍按名字公告（模型可直呼其名），在 `declare` 路由则完全不公告——那里只能靠加载，公告一个注定加载失败的名字只会浪费回合；两种情况都会记录一次 warn。
-- **重放外观**：披露消息在 Chat 里显示为普通用户上下文；重放时工具卡片使用通用样式。
-- **拒绝文案**：默认只预置 `exit_plan_mode` 的原因，其它头部工具的拒绝信息是通用文案，可通过 `unavailableReasons` 覆盖。
-- **无 UI 控制**：没有开关面板，所有行为通过 profile 配置。
+`declare` 保留既有顶层追加行为，会改变缓存前缀；`tail` 依赖模型按文本定义调用工具。PTC 等自带执行器的预设继续跳过，本插件不修改宿主。
