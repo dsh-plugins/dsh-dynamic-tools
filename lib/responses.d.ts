@@ -23,7 +23,7 @@ export declare function additionBytes(schemas: readonly ToolSchemaLike[]): numbe
 /** 单个定义必须同时适合 schema 预算和持久化消息预算。 */
 export declare function canLoadNative(schema: ToolSchemaLike, limits: DisclosureLimits): boolean;
 /** 按最终 UTF-8 文本大小分批，定义、名字与移除通知分别记录。 */
-export declare function planResponsesDisclosure(candidates: readonly ToolSchemaLike[], state: DisclosedState, limits: DisclosureLimits, requireLoad: boolean): {
+export declare function planResponsesDisclosure(candidates: readonly ToolSchemaLike[], state: DisclosedState, limits: DisclosureLimits, requireLoad: boolean, topLevel?: ReadonlySet<string>): {
     additions: ToolSchemaLike[][];
     notices: {
         batch: DisclosureBatch;

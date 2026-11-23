@@ -68,26 +68,51 @@ test('ordinary catalog tracks standing mode, including unknown, without losing i
   assert.equal(hasEscalation(executor.describe([native]).schemas[0]), false)
 })
 
-test('Responses uses immutable saved declarations and discloses the updated permissions at the tail', () => {
+test('原生路由首次组装工具头部时按有效权限决定是否提供提权参数', () => {
+  for (const mode of ['danger-full-access', 'workspace-write', 'read-only', undefined]) {
+    const f = setup(true)
+    f.setMode(mode)
+    const executor = f.makeExecutor()
+    const first = executor.describe([native]).schemas[0]
+    const properties = first.parameters.properties as object
+    for (const field of ['sandbox_permissions', 'justification']) {
+      assert.equal(Object.hasOwn(properties, field), mode !== 'danger-full-access')
+    }
+    assert.equal(executor.describe([native]).schemas[0], first)
+  }
+})
+
+test('原生路由更新旧头部和权限切换，已保存的同名追加不能覆盖顶层', () => {
   const f = setup(true)
-  const oldHeader = [raw]
+  const unchanged = { name: 'unchanged', description: '', parameters: {} }
+  const oldHeader = [unchanged, raw]
   f.setHeader(oldHeader)
   const executor = f.makeExecutor()
-  assert.equal(hasEscalation(executor.describe([native]).schemas[0]), true)
-  const reduced = executor.projectDefinition(native)
-  assert.equal(hasEscalation(reduced), false)
-  const before = foldResponses([], oldHeader)
-  const plan = planResponsesDisclosure([reduced], before, limits, false)
-  assert.deepEqual(plan.additions, [[reduced]])
-  const recorded = additionMessage(f.host, [reduced])
+  const head = executor.describe([native]).schemas
+  assert.deepEqual(head.map(tool => tool.name), ['unchanged', 'pwsh'])
+  assert.deepEqual(head[0], unchanged)
+  assert.equal(hasEscalation(head[1]), false)
+  assert.equal(hasEscalation(oldHeader[1]), true)
+  assert.equal(executor.describe([]).schemas[1], oldHeader[1])
+  f.setHeader(head)
+  assert.equal(executor.describe([native]).schemas[1], head[1])
+
+  const dynamic = { name: 'late', description: '动态工具', parameters: {} }
+  const recorded = additionMessage(f.host, [head[1], dynamic])
   const originalRecord = JSON.stringify(recorded)
-  assert.equal(hasEscalation(projectResponsesRecords([recorded])[0].addition.tools[0]), false)
-  const after = foldResponses([recorded], oldHeader)
-  assert.deepEqual(planResponsesDisclosure([reduced], after, limits, false).additions, [])
+  assert.deepEqual(projectResponsesRecords([recorded])[0].addition.tools.map(tool => tool.name), ['pwsh', 'late'])
+  const before = foldResponses([], oldHeader)
+  const candidates = [unchanged, head[1], dynamic]
+  const plan = planResponsesDisclosure(candidates, before, limits, false, executor.declaredNames())
+  assert.deepEqual(plan.additions, [[dynamic]])
+  assert.deepEqual(plan.notices, [])
+
   f.setMode('workspace-write')
-  executor.describe([native])
-  const restored = executor.projectDefinition(native)
-  assert.equal(hasEscalation(restored), true)
-  assert.deepEqual(planResponsesDisclosure([restored], after, limits, false).additions, [[restored]])
+  const restored = executor.describe([native]).schemas
+  assert.equal(hasEscalation(restored[1]), true)
+  const after = foldResponses([recorded], restored)
+  assert.equal(after.definitions.get('pwsh'), restored[1])
+  assert.deepEqual(after.definitions.get('late'), dynamic)
+  assert.deepEqual(planResponsesDisclosure([unchanged, restored[1], dynamic], after, limits, true, executor.declaredNames()), { additions: [], notices: [] })
   assert.equal(JSON.stringify(recorded), originalRecord)
 })

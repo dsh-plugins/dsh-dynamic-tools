@@ -86,9 +86,13 @@ export function createToolLoad(options: ToolLoadOptions): ToolDefinition {
           unavailable.push(name)
           continue
         }
+        if (declared.has(name)) {
+          alreadyAvailable.push(name)
+          continue
+        }
         const schema = options.project?.(agent, definition) ?? projectToolSchema(definition, true)
         const known = state.definitions.get(name)
-        if ((strategy !== 'responses' && declared.has(name)) || (known && toolSignature(known) === toolSignature(schema))) {
+        if (known && toolSignature(known) === toolSignature(schema)) {
           alreadyAvailable.push(name)
           continue
         }

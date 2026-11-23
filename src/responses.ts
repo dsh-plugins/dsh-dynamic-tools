@@ -49,12 +49,13 @@ export function canLoadNative(schema: ToolSchemaLike, limits: DisclosureLimits):
 }
 
 /** 按最终 UTF-8 文本大小分批，定义、名字与移除通知分别记录。 */
-export function planResponsesDisclosure(candidates: readonly ToolSchemaLike[], state: DisclosedState, limits: DisclosureLimits, requireLoad: boolean) {
+export function planResponsesDisclosure(candidates: readonly ToolSchemaLike[], state: DisclosedState, limits: DisclosureLimits, requireLoad: boolean, topLevel: ReadonlySet<string> = new Set()) {
   const additions: ToolSchemaLike[][] = []
   const notices: { batch: DisclosureBatch, notice: ResponsesToolNotice, text: string }[] = []
   const names: ToolSchemaLike[] = []
   let pending: ToolSchemaLike[] = []
   for (const schema of candidates) {
+    if (topLevel.has(schema.name)) { continue }
     const known = state.disclosed.get(schema.name)
     const bootstrap = schema.name === TOOL_LOAD_NAME
     if (known?.signature === toolSignature(schema)
@@ -126,6 +127,7 @@ export function foldResponses(messages: readonly ResponsesMessage[], baseline: r
   const disclosed = new Map<string, { signature: string | null, schema: boolean }>()
   const definitions = new Map<string, ToolSchemaLike>()
   const loaded = new Set<string>()
+  const topLevel = new Set(baseline.map(schema => schema.name))
   for (const schema of baseline) {
     definitions.set(schema.name, schema)
     loaded.add(schema.name)
@@ -135,6 +137,7 @@ export function foldResponses(messages: readonly ResponsesMessage[], baseline: r
     const record = message.id ? records.get(message.id) : undefined
     if (record) {
       for (const tool of record.addition.tools) {
+        if (topLevel.has(tool.name)) { continue }
         const schema = { name: tool.name, description: tool.description, parameters: tool.parameters }
         definitions.set(tool.name, schema)
         loaded.add(tool.name)
@@ -148,7 +151,9 @@ export function foldResponses(messages: readonly ResponsesMessage[], baseline: r
       throw new Error('dsh-dynamic-tools: 原生工具通知记录无效')
     }
     for (const name of notice.removed) { disclosed.delete(name) }
-    for (const entry of notice.added) { disclosed.set(entry.name, { signature: entry.signature, schema: false }) }
+    for (const entry of notice.added) {
+      if (!topLevel.has(entry.name)) { disclosed.set(entry.name, { signature: entry.signature, schema: false }) }
+    }
   }
   return { disclosed, definitions, loaded, damaged: [] }
 }

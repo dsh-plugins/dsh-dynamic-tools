@@ -109,15 +109,17 @@ test('按最终文本大小和工具数量拆分原生定义及移除通知', ()
   assert.throws(() => planResponsesDisclosure(schemas, foldResponses([]), { ...limits, maxMessageBytes: 20 }, true), /无法容纳/)
 })
 
-test('旧会话缺少加载入口或入口定义升级时直接追加入口，避免要求自身加载', () => {
+test('旧会话缺少加载入口时直接追加，已有顶层入口不受追加预算限制', () => {
   const load = { name: 'tool_load', description: '当前入口', parameters: {} }
   const dynamic = { name: 'dynamic', description: '定义', parameters: {} }
   const limits = { mode: 'names' as const, maxToolsPerMessage: 8, maxSchemaBytes: 6000, maxMessageBytes: 20000 }
-  for (const baseline of [[], [{ ...load, description: '旧入口' }]]) {
-    const plan = planResponsesDisclosure([load, dynamic], foldResponses([], baseline), limits, true)
-    assert.deepEqual(plan.additions, [[load]])
-    assert.deepEqual(plan.notices.flatMap(item => item.batch.names), ['dynamic'])
-  }
+  const missing = planResponsesDisclosure([load, dynamic], foldResponses([]), limits, true)
+  assert.deepEqual(missing.additions, [[load]])
+  assert.deepEqual(missing.notices.flatMap(item => item.batch.names), ['dynamic'])
+  const previous = foldResponses([], [{ ...load, description: '旧入口' }])
+  const updated = planResponsesDisclosure([load, dynamic], previous, { ...limits, maxSchemaBytes: 1 }, true, new Set(['tool_load']))
+  assert.deepEqual(updated.additions, [])
+  assert.deepEqual(updated.notices.flatMap(item => item.batch.names), ['dynamic'])
   assert.throws(() => planResponsesDisclosure([load], foldResponses([]), { ...limits, maxSchemaBytes: 1 }, true), /加载入口/)
 })
 
@@ -146,4 +148,12 @@ test('进入原生策略时统一恢复 header 基线，路由配置变更从下
   const restored = executor.describe(definitions).schemas
   assert.deepEqual(restored, header.tools)
   assert.equal(foldResponses([], restored).definitions.has('dynamic'), true)
+
+  const updatedTool = { ...dynamic, parameters: { properties: { value: { type: 'string' } } } }
+  const addedTool = { ...dynamic, name: 'late' }
+  const updated = executor.describe([load, updatedTool, addedTool] as unknown as ToolDefinition[]).schemas
+  assert.deepEqual(updated, [load, updatedTool])
+  const active = foldResponses([addition('old', 'dynamic'), addition('late')], updated)
+  assert.deepEqual(active.definitions.get('dynamic'), updatedTool)
+  assert.equal(active.loaded.has('late'), true)
 })

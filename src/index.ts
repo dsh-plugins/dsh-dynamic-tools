@@ -223,7 +223,7 @@ export async function apply(ctx: Context & { dshLoader: HostAPI }, config: Confi
     if (!executor || executor.planStrategy() !== 'responses') { return undefined }
     if (!executor.matchesResponsesRoute(request)) { throw new Error('dsh-dynamic-tools: 原生声明已按本步路由准备，但发送路由发生变化；请在下一步重新选择模型') }
     return projectResponsesRecords(request.messages as readonly ResponsesMessage[])
-  })
+  }, { preferTopLevel: true })
 
   ctx.effect(() => ctx.tools.register(createToolLoad({
     sourceKind: SOURCE_KIND,

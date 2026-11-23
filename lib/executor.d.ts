@@ -38,7 +38,7 @@ export declare class StableCatalogExecutor implements ToolExecutor {
     private readonly options;
     private readonly state;
     private readonly host;
-    /** 连续原生步骤共用基线；从其它策略进入时以已保存请求头重新建立基线。 */
+    /** 原生路由只更新已有顶层工具的定义，保持名单及顺序不变。 */
     private catalog;
     /** Names the head declares. */
     private readonly catalogNames;
@@ -61,7 +61,7 @@ export declare class StableCatalogExecutor implements ToolExecutor {
     /** Model-facing projection shared by catalog, disclosures and load. */
     projectDefinition(definition: ToolDefinition): ToolSchemaLike;
     /**
-     * 原生策略恢复已保存基线并冻结本步路由；连续步骤返回同一工具头部。
+     * 原生策略沿用已保存头部的名单；定义发生变化时就地替换，避免依赖同名追加。
      * declare 仍把已加载定义加入顶层，切回原生时按该已保存头部建立新基线。
      * @param tools - definitions this step admits, in registry order.
      * @returns the frozen model-facing catalog.

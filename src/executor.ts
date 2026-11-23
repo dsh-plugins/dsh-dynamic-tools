@@ -52,7 +52,7 @@ export interface ExecutorOptions {
  * Executes the frozen declaration head plus admitted dynamic tools.
  */
 export class StableCatalogExecutor implements ToolExecutor {
-  /** 连续原生步骤共用基线；从其它策略进入时以已保存请求头重新建立基线。 */
+  /** 原生路由只更新已有顶层工具的定义，保持名单及顺序不变。 */
   private catalog: readonly ToolSchemaLike[] | undefined
   /** Names the head declares. */
   private readonly catalogNames = new Set<string>()
@@ -96,7 +96,7 @@ export class StableCatalogExecutor implements ToolExecutor {
   }
 
   /**
-   * 原生策略恢复已保存基线并冻结本步路由；连续步骤返回同一工具头部。
+   * 原生策略沿用已保存头部的名单；定义发生变化时就地替换，避免依赖同名追加。
    * declare 仍把已加载定义加入顶层，切回原生时按该已保存头部建立新基线。
    * @param tools - definitions this step admits, in registry order.
    * @returns the frozen model-facing catalog.
@@ -116,16 +116,21 @@ export class StableCatalogExecutor implements ToolExecutor {
       for (const schema of recorded) { this.catalogNames.add(schema.name) }
     }
     const live = new Map(tools.map(tool => [tool.name, tool]))
-    const baseline = this.catalog ?? this.capture(tools)
-    // Existing Responses headers are replayed verbatim; the pre-step planner adds
-    // any changed live definitions at the tail.
-    const catalog = header !== undefined
-      ? header.tools ?? baseline
-      : baseline.map(schema => {
-        const definition = live.get(schema.name)
+    // 重试或被拒绝的 pre-step 未必提交了上次组装，已保存的头部仍是基线。
+    const baseline = header !== undefined && previousStrategy === 'responses'
+      ? header.tools ?? []
+      : this.catalog ?? this.capture(tools)
+    const catalog = baseline.map(schema => {
+      const definition = live.get(schema.name)
+      if (this.stepStrategy !== 'responses') {
         const current = definition && this.host.projectToolSchema(definition, true)
         return projectSavedSandboxSchema(schema, current, this.noWiderSandbox)
-      })
+      }
+      if (!definition) { return schema }
+      const current = this.projectDefinition(definition)
+      return toolSignature(schema) === toolSignature(current) ? schema : this.host.deepFreeze(current)
+    })
+    if (this.stepStrategy === 'responses') { this.catalog = Object.freeze(catalog) }
     this.stepCatalog = catalog
     if (this.stepStrategy !== 'declare') { return { schemas: [...catalog] } }
     this.reportMissingLoadTool()
@@ -172,7 +177,7 @@ export class StableCatalogExecutor implements ToolExecutor {
   private capture(tools: readonly ToolDefinition[]): readonly ToolSchemaLike[] {
     const catalog = Object.freeze(tools
       .filter(definition => classifyTool(definition.name, this.rules) === 'inline')
-      .map(definition => this.host.deepFreeze(this.host.projectToolSchema(definition, true))))
+      .map(definition => this.host.deepFreeze(this.projectDefinition(definition))))
     this.catalog = catalog
     for (const schema of catalog) { this.catalogNames.add(schema.name) }
     return catalog
@@ -241,7 +246,7 @@ export class StableCatalogExecutor implements ToolExecutor {
     if (this.admittedNames.has(name)) {
       if (this.planStrategy() === 'responses') {
         const current = this.lastAdmitted.find(definition => definition.name === name)
-        const declared = this.state.definitions().get(name) ?? this.stepCatalog.find(schema => schema.name === name)
+        const declared = this.stepCatalog.find(schema => schema.name === name) ?? this.state.definitions().get(name)
         const currentSchema = current && this.projectDefinition(current)
         if (!currentSchema || !declared || toolSignature(currentSchema) !== toolSignature(declared)) { return new Error(loadFirstReason(name)) }
         return undefined

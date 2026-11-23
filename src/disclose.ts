@@ -26,8 +26,8 @@ export interface DiscloseOptions {
 }
 
 /** 原生定义单独成消息，文字通知不与 additional_tools 共用同一消息位置。 */
-function nativeMessages(agent: Agent, candidates: readonly ToolSchemaLike[], options: DiscloseOptions): readonly UserMessage[] {
-  const plan = planResponsesDisclosure(candidates, options.history.read(agent, 'responses'), options.limits, options.requireLoad)
+function nativeMessages(agent: Agent, candidates: readonly ToolSchemaLike[], topLevel: ReadonlySet<string>, options: DiscloseOptions): readonly UserMessage[] {
+  const plan = planResponsesDisclosure(candidates, options.history.read(agent, 'responses'), options.limits, options.requireLoad, topLevel)
   return [
     ...plan.additions.map(schemas => additionMessage(options.host, schemas)),
     ...plan.notices.map(({ notice, text }) => options.host.createUserMessage({
@@ -62,8 +62,8 @@ export function registerDisclosure(ctx: Context, options: DiscloseOptions): void
     for (const name of oversized) { report(agent, `oversized:${name}`, () => ctx.logger.warn('dsh-dynamic-tools: %s 超过声明大小限制，tool_load 将报告 tooLarge', name)) }
     let messages: readonly UserMessage[]
     if (strategy === 'responses') {
-      // 首次请求的静态工具尚未写入 header，避免把它们重复追加。
-      messages = nativeMessages(agent, agent.session.requestHeader() ? all : candidates, options)
+      // 顶层工具参与可用性判断，但定义已由本步请求头发送。
+      messages = nativeMessages(agent, all, catalog, options)
     } else {
       const available = new Set(candidates.map(schema => schema.name))
       const removed = options.announceRemovals ? [...state.disclosed.keys()].filter(name => !available.has(name) && !catalog.has(name)) : []
