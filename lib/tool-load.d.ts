@@ -1,6 +1,7 @@
 /** tool_load 只加载已公告且当前准入的工具；声明通过 deferContext 保存后才生效。 */
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
+import { type ToolSchemaLike } from './catalog.ts';
 import type { DisclosureLimits } from './disclosure.ts';
 import type { DisclosureHistory } from './history.ts';
 import type { HostBindings } from './host.ts';
@@ -12,6 +13,7 @@ export { TOOL_LOAD_NAME } from './source.ts';
 export interface ToolLoadOptions {
     readonly host: HostBindings;
     readonly history: DisclosureHistory;
+    readonly project?: (agent: Agent, definition: ToolDefinition) => ToolSchemaLike;
     readonly admitted: (agent: Agent) => readonly ToolDefinition[] | undefined;
     /** Message source kind owned by this plugin. */
     readonly sourceKind: SourceKind;

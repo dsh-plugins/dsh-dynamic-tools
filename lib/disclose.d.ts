@@ -1,6 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { Agent } from '@deepseek-ai/dsh-agent';
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
+import type { ToolSchemaLike } from './catalog.ts';
 import { type DisclosureLimits } from './disclosure.ts';
 import type { DisclosureHistory } from './history.ts';
 import type { HostBindings } from './host.ts';
@@ -16,6 +17,7 @@ export interface DiscloseOptions {
     readonly announceRemovals: boolean;
     readonly strategy: (agent: Agent) => ToolStrategy | undefined;
     readonly catalogNames: (agent: Agent) => ReadonlySet<string>;
+    readonly project?: (agent: Agent, definition: ToolDefinition) => ToolSchemaLike;
     readonly admitted: (agent: Agent) => readonly ToolDefinition[] | undefined;
 }
 /** 其它 pre-step 处理完成后生成待提交消息，异常沿宿主失败管线报告。 */

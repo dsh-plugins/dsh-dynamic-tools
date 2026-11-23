@@ -44,6 +44,8 @@ export declare class StableCatalogExecutor implements ToolExecutor {
     private readonly catalogNames;
     /** Definitions the current step admits, recorded by the last assembly. */
     private lastAdmitted;
+    private noWiderSandbox;
+    private stepCatalog;
     /** Names the current batch's step admits. */
     private admittedNames;
     /** Strategy settled by the current step's assembly, so every reader agrees. */
@@ -56,6 +58,8 @@ export declare class StableCatalogExecutor implements ToolExecutor {
     declaredNames(): ReadonlySet<string>;
     /** Definitions the current step admits, captured by the last assembly. */
     admittedDefinitions(): readonly ToolDefinition[];
+    /** Model-facing projection shared by catalog, disclosures and load. */
+    projectDefinition(definition: ToolDefinition): ToolSchemaLike;
     /**
      * 原生策略恢复已保存基线并冻结本步路由；连续步骤返回同一工具头部。
      * declare 仍把已加载定义加入顶层，切回原生时按该已保存头部建立新基线。

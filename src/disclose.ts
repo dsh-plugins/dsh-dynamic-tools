@@ -21,6 +21,7 @@ export interface DiscloseOptions {
   readonly announceRemovals: boolean
   readonly strategy: (agent: Agent) => ToolStrategy | undefined
   readonly catalogNames: (agent: Agent) => ReadonlySet<string>
+  readonly project?: (agent: Agent, definition: ToolDefinition) => ToolSchemaLike
   readonly admitted: (agent: Agent) => readonly ToolDefinition[] | undefined
 }
 
@@ -52,7 +53,7 @@ export function registerDisclosure(ctx: Context, options: DiscloseOptions): void
     if (!admitted) { return decision }
     const strategy = options.strategy(agent) ?? 'tail'
     const catalog = options.catalogNames(agent)
-    const all = admitted.map(definition => options.host.projectToolSchema(definition, true))
+    const all = admitted.map(definition => options.project?.(agent, definition) ?? options.host.projectToolSchema(definition, true))
     const candidates = all.filter(schema => !catalog.has(schema.name))
     const state = options.history.read(agent, strategy)
     const limits = strategy === 'declare' || options.requireLoad ? { ...options.limits, mode: 'names' as const } : options.limits

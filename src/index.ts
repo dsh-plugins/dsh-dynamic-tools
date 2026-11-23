@@ -213,6 +213,8 @@ export async function apply(ctx: Context & { dshLoader: HostAPI }, config: Confi
   const strategyOf = (agent: Agent): ToolStrategy | undefined => executors.get(agent)?.planStrategy()
   const declaredNamesOf = (agent: Agent): ReadonlySet<string> => executors.get(agent)?.declaredNames() ?? new Set()
   const admitted = (agent: Agent) => executors.get(agent)?.admittedDefinitions()
+  const project = (agent: Agent, definition: Parameters<StableCatalogExecutor['projectDefinition']>[0]) =>
+    executors.get(agent)?.projectDefinition(definition) ?? host.projectToolSchema(definition, true)
 
   loader.llm.registerResponsesToolAdditions(owner, request => {
     if (!request.sessionId || request.purpose !== undefined) { return undefined }
@@ -225,7 +227,7 @@ export async function apply(ctx: Context & { dshLoader: HostAPI }, config: Confi
 
   ctx.effect(() => ctx.tools.register(createToolLoad({
     sourceKind: SOURCE_KIND,
-    host, history, admitted,
+    host, history, admitted, project,
     limits: settings.disclose.limits,
     strategy: strategyOf,
     declaredNames: declaredNamesOf,
@@ -252,6 +254,6 @@ export async function apply(ctx: Context & { dshLoader: HostAPI }, config: Confi
     host, history,
     strategy: strategyOf,
     catalogNames: declaredNamesOf,
-    admitted,
+    admitted, project,
   })
 }

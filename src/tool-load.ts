@@ -2,7 +2,7 @@
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
-import { schemaBytes, toolSignature } from './catalog.ts'
+import { schemaBytes, toolSignature, type ToolSchemaLike } from './catalog.ts'
 import type { DisclosureLimits } from './disclosure.ts'
 import type { DisclosureHistory } from './history.ts'
 import type { HostBindings } from './host.ts'
@@ -19,6 +19,7 @@ export { TOOL_LOAD_NAME } from './source.ts'
 export interface ToolLoadOptions {
   readonly host: HostBindings
   readonly history: DisclosureHistory
+  readonly project?: (agent: Agent, definition: ToolDefinition) => ToolSchemaLike
   readonly admitted: (agent: Agent) => readonly ToolDefinition[] | undefined
   /** Message source kind owned by this plugin. */
   readonly sourceKind: SourceKind
@@ -85,7 +86,7 @@ export function createToolLoad(options: ToolLoadOptions): ToolDefinition {
           unavailable.push(name)
           continue
         }
-        const schema = projectToolSchema(definition, true)
+        const schema = options.project?.(agent, definition) ?? projectToolSchema(definition, true)
         const known = state.definitions.get(name)
         if ((strategy !== 'responses' && declared.has(name)) || (known && toolSignature(known) === toolSignature(schema))) {
           alreadyAvailable.push(name)

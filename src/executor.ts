@@ -19,6 +19,7 @@ import {
   type ClassificationRules,
   type ToolSchemaLike,
 } from './catalog.ts'
+import { hasNoWiderSandbox, projectSandboxSchema, projectSavedSandboxSchema } from './sandbox-schema.ts'
 import type { DisclosedEntry } from './disclosure.ts'
 import { loadFirstReason, unavailableReason } from './render.ts'
 import { selectStrategy, type StrategyRules, type ToolStrategy } from './strategy.ts'
@@ -57,6 +58,8 @@ export class StableCatalogExecutor implements ToolExecutor {
   private readonly catalogNames = new Set<string>()
   /** Definitions the current step admits, recorded by the last assembly. */
   private lastAdmitted: readonly ToolDefinition[] = []
+  private noWiderSandbox = false
+  private stepCatalog: readonly ToolSchemaLike[] = []
   /** Names the current batch's step admits. */
   private admittedNames: ReadonlySet<string> = new Set()
   /** Strategy settled by the current step's assembly, so every reader agrees. */
@@ -87,6 +90,11 @@ export class StableCatalogExecutor implements ToolExecutor {
     return this.lastAdmitted
   }
 
+  /** Model-facing projection shared by catalog, disclosures and load. */
+  projectDefinition(definition: ToolDefinition): ToolSchemaLike {
+    return projectSandboxSchema(this.host.projectToolSchema(definition, true), this.noWiderSandbox)
+  }
+
   /**
    * 原生策略恢复已保存基线并冻结本步路由；连续步骤返回同一工具头部。
    * declare 仍把已加载定义加入顶层，切回原生时按该已保存头部建立新基线。
@@ -95,20 +103,30 @@ export class StableCatalogExecutor implements ToolExecutor {
    */
   describe(tools: readonly ToolDefinition[]): ToolModelInput {
     this.lastAdmitted = tools
+    this.noWiderSandbox = hasNoWiderSandbox(this.agent)
     const previousStrategy = this.stepStrategy
     const selection = this.agent.model.current()
     this.stepRoute = selection === undefined ? undefined : { provider: selection.provider, model: selection.model }
     this.stepStrategy = selectStrategy(selection, this.options.strategyRules)
-    if (this.stepStrategy === 'responses' && previousStrategy !== 'responses') {
-      const header = this.agent.session.requestHeader()
-      if (header !== undefined) {
-        const recorded = header.tools ?? []
-        this.catalog = this.host.deepFreeze(structuredClone(recorded))
-        this.catalogNames.clear()
-        for (const schema of recorded) { this.catalogNames.add(schema.name) }
-      }
+    const header = this.stepStrategy === 'responses' ? this.agent.session.requestHeader() : undefined
+    if (header !== undefined && previousStrategy !== 'responses') {
+      const recorded = header.tools ?? []
+      this.catalog = this.host.deepFreeze(structuredClone(recorded))
+      this.catalogNames.clear()
+      for (const schema of recorded) { this.catalogNames.add(schema.name) }
     }
-    const catalog = this.catalog ?? this.capture(tools)
+    const live = new Map(tools.map(tool => [tool.name, tool]))
+    const baseline = this.catalog ?? this.capture(tools)
+    // Existing Responses headers are replayed verbatim; the pre-step planner adds
+    // any changed live definitions at the tail.
+    const catalog = header !== undefined
+      ? header.tools ?? baseline
+      : baseline.map(schema => {
+        const definition = live.get(schema.name)
+        const current = definition && this.host.projectToolSchema(definition, true)
+        return projectSavedSandboxSchema(schema, current, this.noWiderSandbox)
+      })
+    this.stepCatalog = catalog
     if (this.stepStrategy !== 'declare') { return { schemas: [...catalog] } }
     this.reportMissingLoadTool()
     return { schemas: this.withDeclared(catalog) }
@@ -174,7 +192,7 @@ export class StableCatalogExecutor implements ToolExecutor {
     for (const [name, recorded] of this.state.definitions()) {
       if (this.catalogNames.has(name)) { continue }
       const current = live.get(name)
-      declared.push(Object.freeze(current === undefined ? recorded : this.host.projectToolSchema(current, true)))
+      declared.push(Object.freeze(current === undefined ? projectSandboxSchema(recorded, this.noWiderSandbox) : this.projectDefinition(current)))
     }
     return extendCatalog(catalog, declared)
   }
@@ -223,8 +241,9 @@ export class StableCatalogExecutor implements ToolExecutor {
     if (this.admittedNames.has(name)) {
       if (this.planStrategy() === 'responses') {
         const current = this.lastAdmitted.find(definition => definition.name === name)
-        const declared = this.state.definitions().get(name) ?? this.catalog?.find(schema => schema.name === name)
-        if (!current || !declared || toolSignature(this.host.projectToolSchema(current, true)) !== toolSignature(declared)) { return new Error(loadFirstReason(name)) }
+        const declared = this.state.definitions().get(name) ?? this.stepCatalog.find(schema => schema.name === name)
+        const currentSchema = current && this.projectDefinition(current)
+        if (!currentSchema || !declared || toolSignature(currentSchema) !== toolSignature(declared)) { return new Error(loadFirstReason(name)) }
         return undefined
       }
       if (this.catalogNames.has(name) || !this.requiresLoad()) { return undefined }
